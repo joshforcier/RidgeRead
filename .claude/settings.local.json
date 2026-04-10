@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/JoshForcier/source/repos/**)",
+      "Bash(npm create:*)",
+      "Bash(npm init:*)",
+      "Bash(npm install:*)",
+      "Bash(npx vue-tsc:*)",
+      "Bash(npx vite:*)",
+      "Bash(kill %1 %2)",
+      "Bash(curl -s http://localhost:5180)",
+      "Bash(kill %1)",
+      "Bash(npx tsx:*)",
+      "Bash(curl -s http://localhost:3001/api/generate-pois -X POST -H \"Content-Type: application/json\" -d '{}')",
+      "Bash(DOTENV_CONFIG_PATH=.env.test npx tsx server/index.ts)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" -X POST http://localhost:3001/api/generate-pois -H \"Content-Type: application/json\" -d '{\"bounds\":{\"north\":40,\"south\":39,\"east\":-107,\"west\":-108},\"season\":\"rut\",\"timeOfDay\":\"dawn\",\"zoom\":13}')"
+    ]
+  }
+}
