@@ -12,7 +12,7 @@ export const useMapStore = defineStore('map', () => {
   // Map view state — centered on Flat Tops, CO
   const center = ref<LatLng>({ lat: 39.955, lng: -107.14 })
   const zoom = ref(13)
-  const baseLayer = ref<BaseLayer>('outdoors')
+  const baseLayer = ref<BaseLayer>('satellite')
 
   // Elk analysis controls
   const season = ref<Season>('rut')
