@@ -5,7 +5,7 @@ export interface PointOfInterest {
   name: string
   lat: number
   lng: number
-  type: 'meadow' | 'drainage' | 'wallow' | 'saddle' | 'spring' | 'trail-junction'
+  type: 'meadow' | 'drainage' | 'wallow' | 'saddle' | 'spring'
   relatedBehaviors: BehaviorLayer[]
   description: string
   /** Verified from real elevation grid (server-side post-processing) */
@@ -21,7 +21,6 @@ export const poiTypeLabels: Record<PointOfInterest['type'], string> = {
   wallow: 'Wallow',
   saddle: 'Saddle',
   spring: 'Spring',
-  'trail-junction': 'Trail Junction',
 }
 
 /**
@@ -73,15 +72,6 @@ export const pointsOfInterest: PointOfInterest[] = [
     type: 'spring',
     relatedBehaviors: ['water', 'feeding'],
     description: 'Year-round spring in a small park. Surrounded by good browse. Pulls elk even in late season.',
-  },
-  {
-    id: 'poi-6',
-    name: 'Timber Junction',
-    lat: 39.955,
-    lng: -107.11,
-    type: 'trail-junction',
-    relatedBehaviors: ['travel'],
-    description: 'Multiple game trails converge in dark spruce. Rubs and tracks everywhere. Funnel point between feeding areas.',
   },
   {
     id: 'poi-7',

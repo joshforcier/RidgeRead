@@ -39,8 +39,8 @@ interface GeneratePOIRequest {
 const METERS_PER_MILE = 1609.34
 const DEFAULT_BUFFER_MILES = 0.5
 
-const SEASONS = ['rut', 'post-rut', 'late-season'] as const
 const TIMES = ['dawn', 'midday', 'dusk'] as const
+const PRESSURES = ['low', 'medium', 'high'] as const
 
 /**
  * Find the nearest terrain grid point to a given lat/lng and return
@@ -107,7 +107,15 @@ WALLOWS (weight: dawn 75%, midday 70%, dusk 80%):
 TRAVEL (weight: dawn 85%, dusk 90%):
 - Peak movement at dawn and dusk. Bulls herd cows along ridgelines, saddles, and timber edges.
 - Travel follows terrain funnels: saddles between drainages, benches connecting meadows to timber, creek bottom edges, finger ridge tops.
-- Place at detected SADDLE points and on ridgeline/finger-ridge features connecting bedding to feeding areas.`,
+- Place at detected SADDLE points and on ridgeline/finger-ridge features connecting bedding to feeding areas.
+
+SECURITY (weight: dawn 40%, midday 60%, dusk 35%):
+- Where elk flee when pressured by hunters. Steep terrain (25-40°+), dense timber (80%+ canopy), >1 mile from roads/trails, >5 miles from any town or settlement.
+- Drainage heads where multiple ridges converge — thickest timber, least human traffic, multiple escape routes.
+- North-facing dark timber bowls with blowdown and deadfall. If you can see 50 yards, it's not thick enough.
+- NEVER place security POIs within 5 miles of a town, village, or developed area. True elk security terrain is remote and far from human activity.
+- Place on the steepest, most remote terrain in the analysis area — detected drainage heads, steep N/NE benches, and finger ridges deep in timber.
+- During rut, pressured bulls abandon bugling and retreat to security cover. Mid-day security is critical — bedded elk in security terrain are nearly unapproachable.`,
 
   'post-rut': `SEASON: POST-RUT (Mid-Oct to Mid-Nov) — Recovery phase. Most difficult to pattern.
 
@@ -133,7 +141,15 @@ WALLOWS (weight: ~5%):
 
 TRAVEL (weight: dawn 35%, dusk 40%):
 - Minimal movement. Bulls emerge late and cautiously at dusk, if at all.
-- Place travel POIs ONLY on the most sheltered corridors — drainage bottoms and timber-to-timber connections. NOT exposed ridgelines.`,
+- Place travel POIs ONLY on the most sheltered corridors — drainage bottoms and timber-to-timber connections. NOT exposed ridgelines.
+
+SECURITY (weight: dawn 70%, midday 90%, dusk 65%):
+- PEAK SECURITY SEASON. Depleted bulls are maximally pressure-sensitive. Flight distance increases to 400m+.
+- Bulls retreat to the most impenetrable terrain available: steep N/NE faces (25-40°), 80%+ canopy, deadfall, dog-hair timber.
+- Drainage heads where 2-3 ridges converge — multiple escape routes, thickest cover, farthest from roads.
+- Blowdown areas and steep sidehill benches where approach noise is unavoidable. If a hunter can get within 200 yards without being detected, it's not security cover.
+- NEVER place security POIs within 5 miles of a town, village, or developed area. True elk security terrain is remote and far from human activity.
+- Place on the steepest, darkest, most remote N/NE terrain. These are the spots pressured bulls will not leave for days.`,
 
   'late-season': `SEASON: LATE SEASON (Late Nov through Dec) — Energy conservation. Cold + snow dominate.
 
@@ -159,15 +175,52 @@ WALLOWS (weight: 0%):
 TRAVEL (weight: dawn 45%, dusk 50%):
 - Elk move between a few core feeding and bedding areas on a tight daily pattern.
 - Migration corridors: narrow valleys, saddles, ridgelines funneling elk from summer to winter range. Storms trigger active migration.
-- Place at saddles and along ridgelines connecting south-facing feeding to south-facing bedding timber.`,
+- Place at saddles and along ridgelines connecting south-facing feeding to south-facing bedding timber.
+
+SECURITY (weight: dawn 30%, midday 55%, dusk 25%):
+- Late-season elk rely more on herd vigilance (50-200+ animals) than terrain for security.
+- When pressured, herds shift to the most remote south-facing timber with wind shelter — leeward side of ridges blocking NW wind.
+- Deep drainage bottoms with thick willows/brush, steep south-facing bowls with timber, and areas >1 mile from any road or trail.
+- Snow makes approach noise unavoidable — security terrain in late season is anywhere deep snow or crust makes silent stalking impossible.
+- NEVER place security POIs within 5 miles of a town, village, or developed area. True elk security terrain is remote and far from human activity.
+- Place on remote S/SW timbered terrain with steep surrounding approaches and limited access.`,
 }
 
 /**
- * Build the GPT prompt for a specific season + time combo, reusing shared terrain context.
+ * Hunting pressure context injected into the prompt.
+ */
+const pressureContext: Record<string, string> = {
+  low: `HUNTING PRESSURE: LOW
+- Minimal human activity in the area. Elk behave naturally with short flight distances (~100m).
+- Elk use open meadows, exposed ridgelines, and terrain close to roads/trails more freely.
+- Security terrain is less important — elk don't need to hide. Favor feeding, water, and travel POIs in accessible terrain.
+- Bulls bugle openly (rut), feed in open parks (post-rut), and use large open meadows (late season).
+- POIs can be placed in more visible, open terrain. Elk are patternable and predictable.`,
+
+  medium: `HUNTING PRESSURE: MODERATE
+- Typical hunting season pressure. Elk have been bumped a few times and are adjusting patterns.
+- Flight distance increases to 200-300m. Elk shift feeding times earlier/later (more crepuscular).
+- Some displacement from easy-access areas. Elk move 0.5-1 mile deeper from roads and trails.
+- Balance POIs between accessible terrain and moderate security cover. Transition zones remain productive.
+- Bulls reduce bugling frequency (rut), become more nocturnal (post-rut), and tighten herd grouping (late season).`,
+
+  high: `HUNTING PRESSURE: HIGH
+- Heavy hunting activity. Elk have been pushed hard and are in full survival mode.
+- Flight distance 400m+. Elk become largely nocturnal — feeding happens in darkness, daylight movement minimal.
+- Elk abandon all terrain within 1 mile of roads, trails, and access points. They shift to the steepest, thickest, most remote terrain available.
+- HEAVILY favor security POIs. Place feeding/water POIs only in remote, heavily timbered areas far from access.
+- During daylight, elk are in the nastiest terrain: 25-40° north-facing slopes with 80%+ canopy, blowdown, deadfall, drainage heads where ridges converge.
+- Travel corridors shift to drainage bottoms and timber-to-timber connections only — no exposed ridgelines.
+- POIs should be placed in terrain that is physically difficult for hunters to reach. If it's easy to get to, elk aren't there.`,
+}
+
+/**
+ * Build the GPT prompt for a specific season + time + pressure combo, reusing shared terrain context.
  */
 function buildPrompt(
   season: string,
   timeOfDay: string,
+  pressure: string,
   bounds: GeneratePOIRequest['bounds'],
   centerLat: number,
   centerLng: number,
@@ -180,6 +233,7 @@ function buildPrompt(
   bufferMeters: number,
 ): string {
   const rules = seasonBehaviorRules[season] || seasonBehaviorRules['rut']
+  const pressureRules = pressureContext[pressure] || pressureContext['medium']
 
   return `You are an expert elk hunting guide placing points of interest using REAL terrain data. You have actual elevation measurements, computed slope/aspect, and verified land cover from OpenStreetMap. Every POI must be grounded in the data below.
 
@@ -195,6 +249,8 @@ ${terrain.slopeAnalysis}
 ${terrain.aspectBreakdown}
 
 ${rules}
+
+${pressureRules}
 
 ELK HABITAT ASSESSMENT:
 ${terrain.elkHabitatNotes}
@@ -212,16 +268,17 @@ UNIVERSAL PRINCIPLES:
 
 PLACEMENT RULES:
 1. ALL POIs must be >${bufferMiles.toFixed(2)} miles (${Math.round(bufferMeters)}m) from ANY road, trail, or building listed above.
-2. Use REAL coordinates from detected terrain features and OSM data — do not invent locations.
-3. NEVER place near buildings or developed areas.
+2. ALL POIs must be >5 miles from any town, village, hamlet, or settlement.
+3. Use REAL coordinates from detected terrain features and OSM data — do not invent locations.
+4. NEVER place near buildings or developed areas.
 4. Match POI type to real terrain: "meadow" ONLY on mapped meadows, "drainage" ONLY at real drainage points, "saddle" ONLY at detected saddles, "spring" ONLY near confirmed water.
 5. Descriptions MUST reference actual elevation, slope angle, aspect, and specific tactical advice for the current season + time of day.
 6. For "${timeOfDay}" specifically: focus POIs on the behaviors with the highest weights for this time window.
 
-Generate 5-20 points of interest. Coordinates STRICTLY WITHIN bounds.
+Generate up to 20 points of interest. Only generate POIs where the terrain genuinely supports the behavior — if the area lacks suitable terrain for a behavior, generate fewer or zero POIs for it. Quality over quantity. Coordinates STRICTLY WITHIN bounds.
 
-POI types: meadow, drainage, wallow, saddle, spring, trail-junction
-Behaviors: feeding, water, bedding, wallows, travel
+POI types: meadow, drainage, wallow, saddle, spring, bench
+Behaviors: feeding, water, bedding, wallows, travel, security
 
 Respond with ONLY valid JSON:
 {
@@ -230,7 +287,7 @@ Respond with ONLY valid JSON:
       "name": "string - descriptive name referencing the actual terrain feature",
       "lat": number,
       "lng": number,
-      "type": "meadow|drainage|wallow|saddle|spring|trail-junction",
+      "type": "meadow|drainage|wallow|saddle|spring|bench",
       "relatedBehaviors": ["feeding", "water", etc - only behaviors relevant to this season],
       "description": "string - 2-3 sentences: what the terrain is, why elk use it this season/time, and specific tactical hunting advice (where to set up, wind direction, approach)"
     }
@@ -283,7 +340,8 @@ export async function generatePOIs(req: Request, res: Response) {
 
     const totalRoadPts = landData.roads.reduce((n, r) => n + r.geometry.length, 0)
     const totalTrailPts = landData.trails.reduce((n, r) => n + r.geometry.length, 0)
-    console.log(`OSM: ${landData.roads.length} roads (${totalRoadPts} pts), ${landData.trails.length} trails (${totalTrailPts} pts), ${landData.forests.length} forests, ${landData.meadows.length} meadows, ${landData.water.length} water, ${landData.streams.length} streams`)
+    const townPoints = landData.towns.flatMap(t => t.geometry)
+    console.log(`OSM: ${landData.roads.length} roads (${totalRoadPts} pts), ${landData.trails.length} trails (${totalTrailPts} pts), ${landData.forests.length} forests, ${landData.meadows.length} meadows, ${landData.water.length} water, ${landData.streams.length} streams, ${landData.towns.length} towns`)
     console.log(`Road/trail segments for buffer check: ${roadTrailSegments.length}`)
     console.log(`Elevation: ${elevGrid.minElevation.toFixed(0)}m – ${elevGrid.maxElevation.toFixed(0)}m (${elevGrid.points.length} points)`)
 
@@ -358,21 +416,23 @@ ${features.join('\n')}
     // ── Step 5: Compute terrain grid for verification (shared across all combos) ──
     const terrainPoints = computeSlopeAspect(elevGrid)
 
-    // ── Step 6: Build and run all 9 season×time GPT calls in parallel ──
+    // ── Step 6: Build and run all 9 time×pressure GPT calls in parallel ──
     const openai = getClient()
     const buildingPoints = landData.buildings.flatMap(b => b.geometry)
 
-    type ComboKey = `${typeof SEASONS[number]}_${typeof TIMES[number]}`
+    type ComboKey = `${typeof TIMES[number]}_${typeof PRESSURES[number]}`
     const comboResults: Record<string, unknown[]> = {}
 
-    console.log('Launching 9 parallel GPT calls (3 seasons × 3 times)...')
+    // Season is fixed from the request body
+    const season = (req.body as GeneratePOIRequest).season || 'rut'
+    console.log(`Launching 9 parallel GPT calls (3 times × 3 pressures) for season: ${season}...`)
 
-    const comboPromises = SEASONS.flatMap(season =>
-      TIMES.map(async (timeOfDay) => {
-        const key: ComboKey = `${season}_${timeOfDay}`
+    const comboPromises = TIMES.flatMap(timeOfDay =>
+      PRESSURES.map(async (pressure) => {
+        const key: ComboKey = `${timeOfDay}_${pressure}`
 
         const prompt = buildPrompt(
-          season, timeOfDay, bounds, centerLat, centerLng,
+          season, timeOfDay, pressure, bounds, centerLat, centerLng,
           terrain, featuresList, terrainSummary,
           roadAvoidanceSection, terrainFeaturesSection,
           bufferMiles, bufferMeters,
@@ -396,14 +456,23 @@ ${features.join('\n')}
         const rawPois = parsed.pois || []
 
         // Server-side buffer enforcement
+        const townBufferMeters = 5 * METERS_PER_MILE // 5 miles from any town
         const filteredPois = rawPois.filter((poi: { lat: number; lng: number; name?: string }) => {
+          // Road/trail buffer
           if (roadTrailSegments.length > 0) {
             if (isNearRoadOrTrail(poi.lat, poi.lng, roadTrailSegments, bufferMeters)) {
               return false
             }
           }
+          // Building buffer
           for (const bPt of buildingPoints) {
             if (haversineMeters(poi.lat, poi.lng, bPt.lat, bPt.lng) < bufferMeters) {
+              return false
+            }
+          }
+          // Town buffer (5 miles)
+          for (const tPt of townPoints) {
+            if (haversineMeters(poi.lat, poi.lng, tPt.lat, tPt.lng) < townBufferMeters) {
               return false
             }
           }
@@ -443,7 +512,7 @@ ${features.join('\n')}
     const totalPois = Object.values(comboResults).reduce((sum, arr) => sum + arr.length, 0)
     console.log(`All 9 combos complete — ${totalPois} total POIs across all combinations`)
 
-    res.json({ combos: comboResults })
+    res.json({ combos: comboResults, season })
   } catch (err: unknown) {
     console.error('POI generation error:', err)
     const message = err instanceof Error ? err.message : 'Unknown error'

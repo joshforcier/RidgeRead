@@ -4,26 +4,43 @@ import type { LatLng } from '@/types/map'
 import type { Season, TimeOfDay, BehaviorLayer } from '@/data/elkBehavior'
 import { behaviorWeights } from '@/data/elkBehavior'
 
-export type BaseLayer = 'street' | 'satellite' | 'topo' | 'terrain'
+export type HuntingPressure = 'low' | 'medium' | 'high'
+
+export type BaseLayer = 'streets' | 'satellite' | 'outdoors' | 'hybrid'
 
 export const useMapStore = defineStore('map', () => {
   // Map view state — centered on Flat Tops, CO
   const center = ref<LatLng>({ lat: 39.955, lng: -107.14 })
   const zoom = ref(13)
-  const baseLayer = ref<BaseLayer>('topo')
+  const baseLayer = ref<BaseLayer>('outdoors')
 
   // Elk analysis controls
   const season = ref<Season>('rut')
   const timeOfDay = ref<TimeOfDay>('dawn')
-  const activeBehaviors = ref<BehaviorLayer[]>(['feeding', 'water', 'bedding', 'wallows', 'travel'])
+  const activeBehaviors = ref<BehaviorLayer[]>(['feeding', 'water', 'bedding', 'wallows', 'travel', 'security'])
   const intensity = ref(0.7) // heatmap opacity 0–1
   const showHeatmap = ref(false)
   const showOverlayZones = ref(true)
   const bufferMiles = ref(0.5) // road/trail/building buffer in miles
+  const huntingPressure = ref<HuntingPressure>('medium')
+  const seasonLocked = ref(false)
 
-  // Derived: current behavior weights for active season + time
+  // Pressure multipliers: scales security up and feeding/travel down at high pressure
+  const pressureModifiers: Record<HuntingPressure, Record<BehaviorLayer, number>> = {
+    low:    { feeding: 1.1, water: 1.0, bedding: 0.9, wallows: 1.0, travel: 1.1, security: 0.5 },
+    medium: { feeding: 1.0, water: 1.0, bedding: 1.0, wallows: 1.0, travel: 1.0, security: 1.0 },
+    high:   { feeding: 0.7, water: 0.8, bedding: 1.1, wallows: 0.6, travel: 0.6, security: 1.5 },
+  }
+
+  // Derived: current behavior weights for active season + time + pressure
   const currentWeights = computed(() => {
-    return behaviorWeights[season.value][timeOfDay.value]
+    const base = behaviorWeights[season.value][timeOfDay.value]
+    const mods = pressureModifiers[huntingPressure.value]
+    const result = {} as Record<BehaviorLayer, number>
+    for (const key of Object.keys(base) as BehaviorLayer[]) {
+      result[key] = Math.min(1, base[key] * mods[key])
+    }
+    return result
   })
 
   function setView(newCenter: LatLng, newZoom: number) {
@@ -32,7 +49,17 @@ export const useMapStore = defineStore('map', () => {
   }
 
   function setSeason(s: Season) {
-    season.value = s
+    if (!seasonLocked.value) {
+      season.value = s
+    }
+  }
+
+  function lockSeason() {
+    seasonLocked.value = true
+  }
+
+  function unlockSeason() {
+    seasonLocked.value = false
   }
 
   function setTimeOfDay(t: TimeOfDay) {
@@ -60,6 +87,10 @@ export const useMapStore = defineStore('map', () => {
     baseLayer.value = layer
   }
 
+  function setHuntingPressure(p: HuntingPressure) {
+    huntingPressure.value = p
+  }
+
   return {
     center,
     zoom,
@@ -71,6 +102,8 @@ export const useMapStore = defineStore('map', () => {
     showHeatmap,
     showOverlayZones,
     bufferMiles,
+    huntingPressure,
+    seasonLocked,
     currentWeights,
     setView,
     setBaseLayer,
@@ -78,6 +111,9 @@ export const useMapStore = defineStore('map', () => {
     setTimeOfDay,
     toggleBehavior,
     setIntensity,
+    setHuntingPressure,
+    lockSeason,
+    unlockSeason,
     toggleOverlayZones,
   }
 })

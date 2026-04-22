@@ -10,23 +10,41 @@
   font-size: 12px !important;
   line-height: 1.4 !important;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
-  max-width: 260px !important;
-  max-height: 160px !important;
-  overflow: hidden !important;
+  width: 280px !important;
+  white-space: normal !important;
 }
 
 .poi-tooltip::before {
   border-top-color: rgba(15, 25, 35, 0.95) !important;
 }
 
-/* Leaflet control overrides for dark theme */
-.leaflet-control-attribution {
-  background: rgba(15, 25, 35, 0.8) !important;
-  color: #4a5568 !important;
-  font-size: 10px !important;
+/* Remove default divIcon box from zone labels and measure labels */
+.zone-label,
+.measure-label {
+  background: none !important;
+  border: none !important;
 }
 
-.leaflet-control-attribution a {
-  color: #6b7c8d !important;
+/* Scale control — bottom-right, above base layer switcher */
+.leaflet-bottom.leaflet-right {
+  bottom: 52px !important;
+  right: 8px !important;
 }
+
+.leaflet-control-scale {
+  margin-bottom: 4px !important;
+}
+
+.leaflet-control-scale-line {
+  background: rgba(15, 25, 35, 0.9) !important;
+  border-color: #e8c547 !important;
+  color: #fff !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  padding: 3px 8px !important;
+  line-height: 1.4 !important;
+  border-radius: 4px !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
+}
+
 

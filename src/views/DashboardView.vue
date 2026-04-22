@@ -38,7 +38,7 @@ const actionCards = [
       <!-- Page header -->
       <div class="page-header">
         <div class="page-badge">DASHBOARD</div>
-        <h1 class="page-title">TerrainIQ Dashboard</h1>
+        <h1 class="page-title">RidgeRead Dashboard</h1>
         <p class="page-subtitle">Elk terrain intelligence and behavior analysis platform.</p>
       </div>
 

@@ -3,16 +3,17 @@ import { ref, computed, watch } from 'vue'
 import { useMap } from '@/composables/useMap'
 import { useHeatmap } from '@/composables/useHeatmap'
 import { useHoverInfo } from '@/composables/useHoverInfo'
-import { usePOIMarkers } from '@/composables/usePOIMarkers'
 import { useAIPois } from '@/composables/useAIPois'
 import { useOverlayZones } from '@/composables/useOverlayZones'
 import { useSelectionBox } from '@/composables/useSelectionBox'
+import { useMeasure } from '@/composables/useMeasure'
 import { pointsOfInterest as defaultPois } from '@/data/pointsOfInterest'
 
 const mapRef = ref<HTMLElement | null>(null)
 const { map } = useMap(mapRef)
 
 const selection = useSelectionBox(map)
+const measure = useMeasure(map)
 const { pois, hasResults, loading, error, analyzedArea, generatePOIs, clearPOIs } = useAIPois(map)
 
 const { terrainCells } = useHeatmap(map, analyzedArea)
@@ -23,7 +24,6 @@ const activePois = computed(() => {
 })
 
 useOverlayZones(map, activePois)
-usePOIMarkers(map, activePois)
 
 watch(() => map.value, (m) => { if (m) attach() }, { immediate: true })
 
@@ -37,10 +37,14 @@ function resetAll() {
   selection.clearSelection()
 }
 
+const measureActive = computed(() => measure.active.value)
+
 defineExpose({
   map, hoverScores,
   pois, hasResults, loading, error, analyzedArea,
   selection,
+  measureActive,
+  toggleMeasure: () => measure.toggle(),
   analyzeSelection, resetAll,
 })
 </script>

@@ -1,4 +1,4 @@
-# TerrainIQ — Landing Page Copy
+# RidgeRead — Landing Page Copy
 
 ---
 
@@ -8,13 +8,13 @@
 **Stop Guessing. Start Reading Terrain Like a 20-Year Guide.**
 
 ### Subheadline
-TerrainIQ uses real elevation data, satellite land cover, and AI-powered terrain analysis to show you exactly where elk are feeding, bedding, wallowing, and traveling — for the season and time of day you're hunting.
+RidgeRead uses real elevation data, satellite land cover, and AI-powered terrain analysis to show you exactly where elk are feeding, bedding, wallowing, and traveling — for the season and time of day you're hunting.
 
 ### CTA
 **[ Analyze Your Unit Free ] [ See It In Action ]**
 
 ### Hero supporting text
-Drop a pin on any 5-mile stretch of elk country. In seconds, TerrainIQ pulls real USGS elevation, computes slope and aspect for every ridge and drainage, maps every meadow, stream, and timber stand from satellite data — then identifies the exact terrain features that hold elk right now. Not last month. Not in general. Right now, for your season, your time of day.
+Drop a pin on any 5-mile stretch of elk country. In seconds, RidgeRead pulls real USGS elevation, computes slope and aspect for every ridge and drainage, maps every meadow, stream, and timber stand from satellite data — then identifies the exact terrain features that hold elk right now. Not last month. Not in general. Right now, for your season, your time of day.
 
 ---
 
@@ -25,7 +25,7 @@ Drop a pin on any 5-mile stretch of elk country. In seconds, TerrainIQ pulls rea
 
 Mapping tools show you what the mountain looks like. They don't tell you what it *means*. That south-facing bench at 9,200 feet with a 12-degree slope and a creek 300 meters below? During the rut at dawn, that's a cow herd transition zone with a herd bull bedded in the timber above it. In late November, it's where 150 elk are soaking up solar warmth between feeding sessions.
 
-You'd need 10 seasons of hunting that drainage to know that. Or you could open TerrainIQ.
+You'd need 10 seasons of hunting that drainage to know that. Or you could open RidgeRead.
 
 ---
 
@@ -55,7 +55,7 @@ And we enforce a customizable buffer from every road and trail — set it from 0
 
 **Headline:** Elk on October 1st at dawn are not the same elk on November 15th at dusk.
 
-TerrainIQ models three distinct seasons with dramatically different behavior:
+RidgeRead models three distinct seasons with dramatically different behavior:
 
 **Rut (Sep–Oct):** Breeding overrides energy. Bulls bugle from saddles, bed on north-facing benches at 10-30 degrees with 60-80% canopy, stay within 400m of water. Wallows are critical. Travel peaks at dawn and dusk along ridgelines and saddles.
 
@@ -87,7 +87,7 @@ Each layer shows a weight percentage that shifts with your season and time selec
 
 **Headline:** Flat Tops. Frank Church. Gila. Your spot.
 
-TerrainIQ works on any coordinates in North America. We're not locked to pre-built unit maps or proprietary datasets. Select a 5-mile area anywhere, and we pull fresh elevation, land cover, and terrain data on the fly. From Colorado's Unit 12 to Montana's Bob Marshall to New Mexico's Gila — if there's terrain, we analyze it.
+RidgeRead works on any coordinates in North America. We're not locked to pre-built unit maps or proprietary datasets. Select a 5-mile area anywhere, and we pull fresh elevation, land cover, and terrain data on the fly. From Colorado's Unit 12 to Montana's Bob Marshall to New Mexico's Gila — if there's terrain, we analyze it.
 
 ---
 
@@ -96,7 +96,7 @@ TerrainIQ works on any coordinates in North America. We're not locked to pre-bui
 ### Headline
 **Built by hunters who got tired of staring at topo lines and guessing.**
 
-TerrainIQ was born from a simple frustration: all the mapping tools in the world show you *what* the terrain looks like, but none of them tell you *what it means for elk.* We built the tool we wished existed — one that reads terrain the way a 20-year guide reads terrain, but does it in 10 seconds for any drainage in the West.
+RidgeRead was born from a simple frustration: all the mapping tools in the world show you *what* the terrain looks like, but none of them tell you *what it means for elk.* We built the tool we wished existed — one that reads terrain the way a 20-year guide reads terrain, but does it in 10 seconds for any drainage in the West.
 
 ---
 
@@ -104,7 +104,7 @@ TerrainIQ was born from a simple frustration: all the mapping tools in the world
 
 1. **Select your area.** Click the map to place a 5-mile analysis box on the terrain you're scouting.
 2. **Choose your season and time.** Rut, post-rut, or late season. Dawn, midday, or dusk.
-3. **Hit Analyze.** TerrainIQ pulls real elevation data, maps land cover, detects terrain features, and generates AI-powered POIs — all in seconds.
+3. **Hit Analyze.** RidgeRead pulls real elevation data, maps land cover, detects terrain features, and generates AI-powered POIs — all in seconds.
 4. **Hunt smarter.** Tap any POI for tactical advice specific to that exact spot, season, and time of day. Toggle behavior layers to understand why elk use that terrain.
 
 ---

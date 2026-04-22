@@ -18,7 +18,7 @@ const defaultZoom = ref(mapStore.zoom)
       <div class="page-header">
         <div class="page-badge">SETTINGS</div>
         <h1 class="page-title">Settings</h1>
-        <p class="page-subtitle">Configure your TerrainIQ preferences.</p>
+        <p class="page-subtitle">Configure your RidgeRead preferences.</p>
       </div>
 
       <!-- Appearance -->

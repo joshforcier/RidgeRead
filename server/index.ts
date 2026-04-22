@@ -14,5 +14,5 @@ app.use(express.json())
 app.post('/api/generate-pois', generatePOIs)
 
 app.listen(PORT, () => {
-  console.log(`TerrainIQ API server running on http://localhost:${PORT}`)
+  console.log(`RidgeRead API server running on http://localhost:${PORT}`)
 })

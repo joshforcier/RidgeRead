@@ -1,6 +1,6 @@
 export type Season = 'rut' | 'post-rut' | 'late-season'
 export type TimeOfDay = 'dawn' | 'midday' | 'dusk'
-export type BehaviorLayer = 'feeding' | 'water' | 'bedding' | 'wallows' | 'travel'
+export type BehaviorLayer = 'feeding' | 'water' | 'bedding' | 'wallows' | 'travel' | 'security'
 
 export interface BehaviorWeights {
   feeding: number
@@ -8,6 +8,7 @@ export interface BehaviorWeights {
   bedding: number
   wallows: number
   travel: number
+  security: number
 }
 
 /**
@@ -29,20 +30,20 @@ export interface BehaviorWeights {
  */
 export const behaviorWeights: Record<Season, Record<TimeOfDay, BehaviorWeights>> = {
   rut: {
-    //                                 feed  water  bed   wallow travel
-    dawn:   { feeding: 0.35, water: 0.50, bedding: 0.15, wallows: 0.75, travel: 0.85 },
-    midday: { feeding: 0.05, water: 0.30, bedding: 0.80, wallows: 0.70, travel: 0.10 },
-    dusk:   { feeding: 0.40, water: 0.55, bedding: 0.10, wallows: 0.80, travel: 0.90 },
+    //                                 feed  water  bed   wallow travel security
+    dawn:   { feeding: 0.35, water: 0.50, bedding: 0.15, wallows: 0.75, travel: 0.85, security: 0.40 },
+    midday: { feeding: 0.05, water: 0.30, bedding: 0.80, wallows: 0.70, travel: 0.10, security: 0.60 },
+    dusk:   { feeding: 0.40, water: 0.55, bedding: 0.10, wallows: 0.80, travel: 0.90, security: 0.35 },
   },
   'post-rut': {
-    dawn:   { feeding: 0.65, water: 0.30, bedding: 0.30, wallows: 0.05, travel: 0.35 },
-    midday: { feeding: 0.15, water: 0.15, bedding: 0.95, wallows: 0.02, travel: 0.05 },
-    dusk:   { feeding: 0.75, water: 0.35, bedding: 0.15, wallows: 0.05, travel: 0.40 },
+    dawn:   { feeding: 0.65, water: 0.30, bedding: 0.30, wallows: 0.05, travel: 0.35, security: 0.70 },
+    midday: { feeding: 0.15, water: 0.15, bedding: 0.95, wallows: 0.02, travel: 0.05, security: 0.90 },
+    dusk:   { feeding: 0.75, water: 0.35, bedding: 0.15, wallows: 0.05, travel: 0.40, security: 0.65 },
   },
   'late-season': {
-    dawn:   { feeding: 0.90, water: 0.10, bedding: 0.20, wallows: 0.00, travel: 0.45 },
-    midday: { feeding: 0.25, water: 0.05, bedding: 0.85, wallows: 0.00, travel: 0.10 },
-    dusk:   { feeding: 0.90, water: 0.10, bedding: 0.15, wallows: 0.00, travel: 0.50 },
+    dawn:   { feeding: 0.90, water: 0.10, bedding: 0.20, wallows: 0.00, travel: 0.45, security: 0.30 },
+    midday: { feeding: 0.25, water: 0.05, bedding: 0.85, wallows: 0.00, travel: 0.10, security: 0.55 },
+    dusk:   { feeding: 0.90, water: 0.10, bedding: 0.15, wallows: 0.00, travel: 0.50, security: 0.25 },
   },
 }
 
@@ -64,6 +65,7 @@ export const behaviorLabels: Record<BehaviorLayer, string> = {
   bedding: 'Bedding',
   wallows: 'Wallows',
   travel: 'Travel Corridors',
+  security: 'Security',
 }
 
 export const behaviorColors: Record<BehaviorLayer, string> = {
@@ -72,6 +74,7 @@ export const behaviorColors: Record<BehaviorLayer, string> = {
   bedding: '#a78bfa',
   wallows: '#f97316',
   travel: '#facc15',
+  security: '#ef4444',
 }
 
 /**

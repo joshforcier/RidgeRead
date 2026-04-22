@@ -3,20 +3,21 @@ import type L from 'leaflet'
 import type { PointOfInterest } from '@/data/pointsOfInterest'
 import { useMapStore } from '@/stores/map'
 import type { SelectionBounds } from './useSelectionBox'
-import type { Season, TimeOfDay } from '@/data/elkBehavior'
+import type { TimeOfDay } from '@/data/elkBehavior'
+import type { HuntingPressure } from '@/stores/map'
 
 export type AnalyzedArea = SelectionBounds
 
-type ComboKey = `${Season}_${TimeOfDay}`
+type ComboKey = `${TimeOfDay}_${HuntingPressure}`
 
-function comboKey(season: Season, timeOfDay: TimeOfDay): ComboKey {
-  return `${season}_${timeOfDay}`
+function comboKey(timeOfDay: TimeOfDay, pressure: HuntingPressure): ComboKey {
+  return `${timeOfDay}_${pressure}`
 }
 
 export function useAIPois(map: ShallowRef<L.Map | null>) {
   const mapStore = useMapStore()
 
-  /** All 9 season×time POI sets, keyed like "rut_dawn" */
+  /** All 9 time×pressure POI sets, keyed like "dawn_low" */
   const allCombos = ref<Record<string, PointOfInterest[]>>({})
 
   const loading = ref(false)
@@ -26,10 +27,10 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
   /** Whether we have analysis results loaded */
   const hasResults = computed(() => Object.keys(allCombos.value).length > 0)
 
-  /** The active POI set for the current season + time selection */
+  /** The active POI set for the current time + pressure selection */
   const pois = computed<PointOfInterest[]>(() => {
     if (!hasResults.value) return []
-    const key = comboKey(mapStore.season, mapStore.timeOfDay)
+    const key = comboKey(mapStore.timeOfDay, mapStore.huntingPressure)
     return allCombos.value[key] ?? []
   })
 
@@ -45,6 +46,7 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           bounds: selectionBounds,
+          season: mapStore.season,
           bufferMiles: mapStore.bufferMiles,
         }),
       })
@@ -66,6 +68,7 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
 
       allCombos.value = combos
       analyzedArea.value = selectionBounds
+      mapStore.lockSeason()
     } catch (err: unknown) {
       error.value = err instanceof Error ? err.message : 'Failed to generate POIs'
       console.error('AI POI generation failed:', err)
@@ -78,6 +81,7 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
     allCombos.value = {}
     analyzedArea.value = null
     error.value = null
+    mapStore.unlockSeason()
   }
 
   return {

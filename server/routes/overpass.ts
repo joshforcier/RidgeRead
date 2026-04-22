@@ -4,7 +4,7 @@
  */
 
 export interface OSMFeature {
-  type: 'road' | 'trail' | 'building' | 'water' | 'forest' | 'meadow' | 'ridge' | 'stream'
+  type: 'road' | 'trail' | 'building' | 'water' | 'forest' | 'meadow' | 'ridge' | 'stream' | 'town'
   name?: string
   geometry: Array<{ lat: number; lng: number }>
 }
@@ -18,6 +18,7 @@ export interface OSMLandData {
   meadows: OSMFeature[]
   ridges: OSMFeature[]
   streams: OSMFeature[]
+  towns: OSMFeature[]
 }
 
 interface OverpassElement {
@@ -44,7 +45,11 @@ export async function fetchLandData(bounds: {
 }): Promise<OSMLandData> {
   const bbox = `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`
 
-  // Query for: roads, trails/paths, buildings, water bodies, forests, meadows, ridges, streams
+  // Wider bbox for towns (5 miles ≈ 0.072° lat, adjusted for lng)
+  const townBuffer = 0.072
+  const townBbox = `${bounds.south - townBuffer},${bounds.west - townBuffer * 1.4},${bounds.north + townBuffer},${bounds.east + townBuffer * 1.4}`
+
+  // Query for: roads, trails/paths, buildings, water bodies, forests, meadows, ridges, streams, towns
   const query = `
 [out:json][timeout:60][maxsize:10485760];
 (
@@ -70,6 +75,8 @@ export async function fetchLandData(bounds: {
   // Ridges/saddles
   node["natural"~"^(ridge|saddle|peak)$"](${bbox});
   way["natural"="ridge"](${bbox});
+  // Towns/villages/cities (wider bbox — 5mi buffer for town avoidance)
+  node["place"~"^(city|town|village|hamlet)$"](${townBbox});
 );
 out geom;
 `
@@ -105,6 +112,7 @@ function emptyLandData(): OSMLandData {
     meadows: [],
     ridges: [],
     streams: [],
+    towns: [],
   }
 }
 
@@ -142,6 +150,8 @@ function categorizeElements(elements: OverpassElement[]): OSMLandData {
       data.meadows.push({ type: 'meadow', name, geometry: geom })
     } else if (natural === 'ridge' || natural === 'saddle' || natural === 'peak') {
       data.ridges.push({ type: 'ridge', name, geometry: geom })
+    } else if (tags.place && ['city', 'town', 'village', 'hamlet'].includes(tags.place)) {
+      data.towns.push({ type: 'town', name, geometry: geom })
     }
   }
 

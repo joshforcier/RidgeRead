@@ -205,7 +205,7 @@ const pricingTiers = [
         </p>
         <p class="problem-text">
           You'd need 10 seasons of hunting that drainage to know that.
-          <strong class="text-amber">Or you could open TerrainIQ.</strong>
+          <strong class="text-amber">Or you could open RidgeRead.</strong>
         </p>
       </div>
     </section>
@@ -231,7 +231,7 @@ const pricingTiers = [
           Three Seasons. Three Different Animals.
         </h2>
         <p class="section-sub">
-          Elk behavior shifts dramatically across the fall. TerrainIQ models each phase
+          Elk behavior shifts dramatically across the fall. RidgeRead models each phase
           with specific slope angles, aspect preferences, canopy requirements, and water proximity rules.
         </p>
         <div class="season-cards">

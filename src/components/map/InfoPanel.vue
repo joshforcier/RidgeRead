@@ -4,7 +4,7 @@ import { useMapStore } from '@/stores/map'
 import { tacticalNotes, seasonLabels, timeLabels } from '@/data/elkBehavior'
 
 const mapStore = useMapStore()
-const dismissed = ref(false)
+const dismissed = ref(true)
 
 const currentNote = computed(() => {
   return tacticalNotes[mapStore.season][mapStore.timeOfDay]

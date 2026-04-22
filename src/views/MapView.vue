@@ -4,12 +4,24 @@ import MapContainer from '@/components/map/MapContainer.vue'
 import HoverTooltip from '@/components/map/HoverTooltip.vue'
 import InfoPanel from '@/components/map/InfoPanel.vue'
 import type { HoverScores } from '@/composables/useHoverInfo'
+import { useMapStore, type BaseLayer } from '@/stores/map'
+
+const mapStore = useMapStore()
+
+const baseLayerOptions: { label: string; value: BaseLayer; icon: string }[] = [
+  { label: 'Streets', value: 'streets', icon: 'map' },
+  { label: 'Satellite', value: 'satellite', icon: 'satellite_alt' },
+  { label: 'Outdoors', value: 'outdoors', icon: 'terrain' },
+  { label: 'Hybrid', value: 'hybrid', icon: 'layers' },
+]
 
 const mapContainerRef = ref<InstanceType<typeof MapContainer> | null>(null)
 
 const hoverScores = computed<HoverScores | null>(() => {
   return mapContainerRef.value?.hoverScores ?? null
 })
+
+const measuring = computed(() => mapContainerRef.value?.measureActive ?? false)
 
 const aiLoading = computed(() => mapContainerRef.value?.loading ?? false)
 const aiError = computed(() => mapContainerRef.value?.error ?? null)
@@ -72,7 +84,7 @@ function resetAll() {
       >
         <q-spinner-dots v-if="aiLoading" color="dark" size="18px" />
         <q-icon v-else name="auto_awesome" size="18px" />
-        <span>{{ aiLoading ? 'Analyzing all seasons...' : 'Analyze Area' }}</span>
+        <span>{{ aiLoading ? 'Analyzing all combos...' : 'Analyze Area' }}</span>
       </button>
 
       <!-- Reposition button -->
@@ -100,13 +112,39 @@ function resetAll() {
     <div v-if="hasResults" class="ai-badge">
       <q-icon name="auto_awesome" size="14px" />
       {{ aiPoisCount }} POIs
-      <span class="ai-badge-hint">Change season/time to update</span>
+      <span class="ai-badge-hint">Change time/pressure to update</span>
     </div>
 
     <!-- Error notification -->
     <div v-if="aiError" class="ai-error">
       <q-icon name="error" size="18px" />
       <span>{{ aiError }}</span>
+    </div>
+
+    <!-- Map tools bar -->
+    <div class="map-tools-bar">
+      <button
+        class="layer-btn"
+        :class="{ 'layer-btn--active': measuring }"
+        @click="mapContainerRef?.toggleMeasure()"
+      >
+        <q-icon name="straighten" size="16px" />
+        <span class="layer-label">Measure</span>
+      </button>
+    </div>
+
+    <!-- Base map layer switcher -->
+    <div class="base-layer-switcher">
+      <button
+        v-for="opt in baseLayerOptions"
+        :key="opt.value"
+        class="layer-btn"
+        :class="{ 'layer-btn--active': mapStore.baseLayer === opt.value }"
+        @click="mapStore.setBaseLayer(opt.value)"
+      >
+        <q-icon :name="opt.icon" size="16px" />
+        <span class="layer-label">{{ opt.label }}</span>
+      </button>
     </div>
   </q-page>
 </template>
@@ -228,7 +266,7 @@ function resetAll() {
 /* ─── Error ─── */
 .ai-error {
   position: absolute;
-  bottom: 12px;
+  bottom: 60px;
   right: 12px;
   z-index: 1000;
   max-width: 380px;
@@ -253,5 +291,70 @@ function resetAll() {
   font-size: 12px;
   border-radius: 8px;
   padding: 8px 12px;
+}
+
+/* ─── Map Tools Bar ─── */
+.map-tools-bar {
+  position: absolute;
+  bottom: 12px;
+  left: 130px;
+  z-index: 1000;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(15, 25, 35, 0.9);
+  backdrop-filter: blur(12px);
+  border: 1px solid #1e2d3d;
+  border-radius: 10px;
+}
+
+/* ─── Base Layer Switcher ─── */
+.base-layer-switcher {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 1000;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(15, 25, 35, 0.9);
+  backdrop-filter: blur(12px);
+  border: 1px solid #1e2d3d;
+  border-radius: 10px;
+}
+
+.layer-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #6b7c8d;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.layer-btn:hover {
+  color: #c8d6e5;
+  background: rgba(200, 214, 229, 0.06);
+}
+
+.layer-btn--active {
+  border-color: rgba(232, 197, 71, 0.3);
+  background: rgba(232, 197, 71, 0.1);
+  color: #e8c547;
+}
+
+@media (max-width: 599px) {
+  .layer-label {
+    display: none;
+  }
+  .layer-btn {
+    padding: 6px 8px;
+  }
 }
 </style>
