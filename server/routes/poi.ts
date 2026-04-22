@@ -6,14 +6,14 @@ import {
   getRoadTrailSegments,
   isNearRoadOrTrail,
   haversineMeters,
-} from './overpass'
-import { fetchElevationGrid } from '../services/elevation'
+} from './overpass.js'
+import { fetchElevationGrid } from '../services/elevation.js'
 import {
   analyzeTerrainForPrompt,
   formatFeaturesForPrompt,
   computeSlopeAspect,
   type TerrainPoint,
-} from '../services/terrainAnalysis'
+} from '../services/terrainAnalysis.js'
 
 function getClient(): OpenAI {
   const apiKey = process.env.OPENAI_API_KEY

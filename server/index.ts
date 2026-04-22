@@ -1,7 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
-import { generatePOIs } from './routes/poi'
+import { generatePOIs } from './routes/poi.js'
 
 dotenv.config()
 
