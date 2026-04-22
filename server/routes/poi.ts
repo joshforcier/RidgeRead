@@ -442,7 +442,7 @@ ${features.join('\n')}
           model: 'gpt-5.4-mini',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.7,
-          max_completion_tokens: 2500,
+          max_completion_tokens: 8000,
           response_format: { type: 'json_object' },
         })
 
