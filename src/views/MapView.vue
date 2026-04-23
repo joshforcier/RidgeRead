@@ -27,6 +27,7 @@ const aiLoading = computed(() => mapContainerRef.value?.loading ?? false)
 const aiError = computed(() => mapContainerRef.value?.error ?? null)
 const hasResults = computed(() => mapContainerRef.value?.hasResults ?? false)
 const aiPoisCount = computed(() => mapContainerRef.value?.pois?.length ?? 0)
+const fromCache = computed(() => mapContainerRef.value?.fromCache ?? false)
 
 // `selection` is an object exposed via defineExpose — Vue only auto-unwraps refs at
 // the top level of the exposed surface, so we have to read `.value` explicitly here.
@@ -143,9 +144,16 @@ function resetAll() {
         <template v-else-if="mode === 'done'">
           <p class="step-caption">
             <q-icon name="auto_awesome" size="14px" color="amber" />
-            <strong>{{ aiPoisCount }}</strong>&nbsp;POIs generated.
+            <strong>{{ aiPoisCount }}</strong>&nbsp;POIs
+            <span v-if="fromCache" class="cache-badge">
+              <q-icon name="bookmark" size="10px" />Saved
+            </span>
           </p>
-          <p class="step-caption-hint">Change time/pressure on the sidebar to update.</p>
+          <p class="step-caption-hint">
+            {{ fromCache
+              ? 'Loaded from a previous analysis of this area.'
+              : 'Change time/pressure on the sidebar to update.' }}
+          </p>
           <button class="map-btn map-btn--ghost map-btn--sm" @click="resetAll">
             <q-icon name="restart_alt" size="14px" />
             New Selection
@@ -319,6 +327,22 @@ function resetAll() {
   font-weight: 500;
   color: #6b7c8d;
   line-height: 1.4;
+}
+
+.cache-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(232, 197, 71, 0.12);
+  border: 1px solid rgba(232, 197, 71, 0.25);
+  color: #e8c547;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
 }
 
 @keyframes pulse-text {

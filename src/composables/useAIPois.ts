@@ -2,6 +2,8 @@ import { ref, computed, type ShallowRef } from 'vue'
 import type L from 'leaflet'
 import type { PointOfInterest } from '@/data/pointsOfInterest'
 import { useMapStore } from '@/stores/map'
+import { useAuthStore } from '@/stores/auth'
+import { useAnalysisStore } from '@/stores/analysis'
 import type { SelectionBounds } from './useSelectionBox'
 import type { TimeOfDay } from '@/data/elkBehavior'
 import type { HuntingPressure } from '@/stores/map'
@@ -16,6 +18,8 @@ function comboKey(timeOfDay: TimeOfDay, pressure: HuntingPressure): ComboKey {
 
 export function useAIPois(map: ShallowRef<L.Map | null>) {
   const mapStore = useMapStore()
+  const authStore = useAuthStore()
+  const analysisStore = useAnalysisStore()
 
   /** All 9 time×pressure POI sets, keyed like "dawn_low" */
   const allCombos = ref<Record<string, PointOfInterest[]>>({})
@@ -23,6 +27,8 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
   const loading = ref(false)
   const error = ref<string | null>(null)
   const analyzedArea = ref<AnalyzedArea | null>(null)
+  /** True when the current results came from cache (not a fresh API call) */
+  const fromCache = ref(false)
 
   /** Whether we have analysis results loaded */
   const hasResults = computed(() => Object.keys(allCombos.value).length > 0)
@@ -34,13 +40,35 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
     return allCombos.value[key] ?? []
   })
 
+  function hydrateCombos(raw: Record<string, PointOfInterest[]>): Record<string, PointOfInterest[]> {
+    const combos: Record<string, PointOfInterest[]> = {}
+    for (const [key, rawPois] of Object.entries(raw || {})) {
+      combos[key] = (rawPois as PointOfInterest[]).map((poi, i) => ({
+        ...poi,
+        id: poi.id ?? `ai-poi-${key}-${Date.now()}-${i}`,
+      }))
+    }
+    return combos
+  }
+
   async function generatePOIs(selectionBounds: SelectionBounds) {
     if (!map.value) return
 
     loading.value = true
     error.value = null
+    fromCache.value = false
 
     try {
+      // Cache hit: load from Firestore instead of calling the API.
+      const cached = analysisStore.findOverlapping(selectionBounds, mapStore.season)
+      if (cached) {
+        allCombos.value = hydrateCombos(cached.combos)
+        analyzedArea.value = cached.bounds
+        fromCache.value = true
+        mapStore.lockSeason()
+        return
+      }
+
       const res = await fetch('/api/generate-pois', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -57,18 +85,22 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
       }
 
       const data = await res.json()
-      const combos: Record<string, PointOfInterest[]> = {}
-
-      for (const [key, rawPois] of Object.entries(data.combos || {})) {
-        combos[key] = (rawPois as PointOfInterest[]).map((poi, i) => ({
-          ...poi,
-          id: `ai-poi-${key}-${Date.now()}-${i}`,
-        }))
-      }
+      const combos = hydrateCombos(data.combos || {})
 
       allCombos.value = combos
       analyzedArea.value = selectionBounds
       mapStore.lockSeason()
+
+      // Persist for future sessions (silent failure — don't block the user).
+      if (authStore.user?.uid) {
+        analysisStore.saveAnalysis({
+          userId: authStore.user.uid,
+          bounds: selectionBounds,
+          season: mapStore.season,
+          bufferMiles: mapStore.bufferMiles,
+          combos,
+        })
+      }
     } catch (err: unknown) {
       error.value = err instanceof Error ? err.message : 'Failed to generate POIs'
       console.error('AI POI generation failed:', err)
@@ -81,6 +113,7 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
     allCombos.value = {}
     analyzedArea.value = null
     error.value = null
+    fromCache.value = false
     mapStore.unlockSeason()
   }
 
@@ -91,6 +124,7 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
     loading,
     error,
     analyzedArea,
+    fromCache,
     generatePOIs,
     clearPOIs,
   }
