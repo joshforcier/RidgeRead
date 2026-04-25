@@ -1,11 +1,11 @@
-# TerrainIQ — App Store Listings
+# RidgeRead — App Store Listings
 
 ---
 
 ## iOS App Store
 
 ### App Name
-TerrainIQ — Elk Terrain Scout
+RidgeRead — Elk Terrain Scout
 
 ### Subtitle (30 chars max)
 AI Elk Habitat Analysis
@@ -17,9 +17,9 @@ Now with real USGS elevation data + satellite land cover. Analyze any drainage i
 
 **Read terrain like a guide. Scout any unit from your couch.**
 
-TerrainIQ analyzes real terrain data to show you where elk are feeding, bedding, wallowing, and traveling — specific to the season and time of day you're hunting.
+RidgeRead analyzes real terrain data to show you where elk are feeding, bedding, wallowing, and traveling — specific to the season and time of day you're hunting.
 
-This isn't another topo map with waypoints. TerrainIQ pulls actual USGS elevation data, computes slope and aspect for every feature in your area, maps real land cover from satellite data (streams, meadows, timber stands, roads), then uses AI to identify the specific terrain features that hold elk.
+This isn't another topo map with waypoints. RidgeRead pulls actual USGS elevation data, computes slope and aspect for every feature in your area, maps real land cover from satellite data (streams, meadows, timber stands, roads), then uses AI to identify the specific terrain features that hold elk.
 
 **HOW IT WORKS**
 1. Drop a 5-mile box on any terrain in elk country
@@ -51,7 +51,7 @@ Season-specific elk behavior:
 - Works anywhere in North America — no pre-built unit maps required
 
 **BUILT BY ELK HUNTERS**
-We got tired of staring at topo lines and guessing. TerrainIQ reads terrain the way an experienced guide reads terrain — it just does it in 10 seconds for any drainage in the West.
+We got tired of staring at topo lines and guessing. RidgeRead reads terrain the way an experienced guide reads terrain — it just does it in 10 seconds for any drainage in the West.
 
 ### Keywords (100 chars max)
 elk,hunting,terrain,scout,topo,habitat,rut,bedding,wallow,saddle,mapping,AI,analysis,deer,big game
@@ -65,7 +65,7 @@ Secondary: Navigation
 ## Google Play Store
 
 ### App Name
-TerrainIQ — Elk Terrain Scout
+RidgeRead — Elk Terrain Scout
 
 ### Short Description (80 chars max)
 AI-powered elk terrain analysis. Real elevation data. Real hunting intelligence.
@@ -74,15 +74,15 @@ AI-powered elk terrain analysis. Real elevation data. Real hunting intelligence.
 
 Read terrain like a 20-year guide. Scout any unit from your truck.
 
-TerrainIQ analyzes real USGS elevation data and satellite land cover to show you exactly where elk are feeding, bedding, wallowing, and traveling — for your specific season and time of day.
+RidgeRead analyzes real USGS elevation data and satellite land cover to show you exactly where elk are feeding, bedding, wallowing, and traveling — for your specific season and time of day.
 
 DROP A PIN. GET INTELLIGENCE.
-Select any 5-mile area in elk country. TerrainIQ pulls a 400-point elevation grid, computes real slope and aspect, maps every stream, meadow, and timber stand from satellite data, then generates AI-powered points of interest placed on actual terrain features.
+Select any 5-mile area in elk country. RidgeRead pulls a 400-point elevation grid, computes real slope and aspect, maps every stream, meadow, and timber stand from satellite data, then generates AI-powered points of interest placed on actual terrain features.
 
 Every POI comes with tactical hunting advice referencing the real elevation, slope angle, and aspect at that spot. No generic tips. No guesswork.
 
 SEASON-SPECIFIC BEHAVIOR MODELING
-Elk on October 1st are not the same elk on November 15th. TerrainIQ models three phases:
+Elk on October 1st are not the same elk on November 15th. RidgeRead models three phases:
 
 Rut (Sep-Oct): Breeding mode. Bulls bugle from saddles, bed on north-facing benches at 10-30 degrees within 400m of water. Wallows are critical — flat boggy areas at drainage heads in timber. Travel peaks at dawn and dusk.
 

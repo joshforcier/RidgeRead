@@ -17,7 +17,7 @@ const mapStore = useMapStore()
 const baseLayerOptions: { label: string; value: BaseLayer; icon: string }[] = [
   { label: 'Streets', value: 'streets', icon: 'map' },
   { label: 'Satellite', value: 'satellite', icon: 'satellite_alt' },
-  { label: 'Outdoors', value: 'outdoors', icon: 'terrain' },
+  { label: 'Topo', value: 'outdoors', icon: 'terrain' },
   { label: 'Hybrid', value: 'hybrid', icon: 'layers' },
   { label: 'LIDAR', value: 'lidar', icon: 'landscape' },
 ]

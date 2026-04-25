@@ -1,9 +1,16 @@
 /**
- * Bulk elevation data from the Open-Meteo Elevation API.
- * Uses Copernicus DEM (90m resolution), free, no API key.
+ * Elevation data from Mapbox Terrain-RGB raster tiles.
  *
- * https://open-meteo.com/en/docs/elevation-api
+ * Each pixel in a Terrain-RGB tile encodes elevation in meters:
+ *   elevation = -10000 + ((R * 256 * 256 + G * 256 + B) * 0.1)
+ *
+ * A handful of CDN-cached tile fetches replaces hundreds of point queries
+ * to Open-Meteo and gives ~30m/pixel resolution at typical hunting-area zooms.
+ *
+ * Docs: https://docs.mapbox.com/data/tilesets/reference/mapbox-terrain-rgb-v1/
  */
+
+import { PNG } from 'pngjs'
 
 export interface ElevationPoint {
   lat: number
@@ -20,103 +27,151 @@ export interface ElevationGrid {
   avgElevation: number
 }
 
-const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/elevation'
-const BATCH_SIZE = 100 // Open-Meteo limit per request
+const TILE_SIZE = 256
+const MIN_ZOOM = 10
+const MAX_ZOOM = 14
+const MAX_TILES = 36 // hard safety cap to avoid runaway fetches on huge bboxes
 
-/**
- * Fetch elevation for an array of lat/lng pairs, batched automatically.
- */
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-async function fetchWithRetry(url: string, retries = 2): Promise<Response | null> {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await fetch(url)
-      if (res.ok) return res
-      if (res.status === 429) {
-        // Rate limited — wait and retry
-        const wait = (attempt + 1) * 1500
-        console.log(`Open-Meteo 429, retrying in ${wait}ms...`)
-        await sleep(wait)
-        continue
-      }
-      console.error(`Open-Meteo returned ${res.status}`)
-      return null
-    } catch (err) {
-      console.error('Open-Meteo fetch error:', err)
-      if (attempt < retries) await sleep(1000)
-    }
-  }
-  return null
-}
-
-async function fetchElevations(
-  coords: Array<{ lat: number; lng: number }>
-): Promise<number[]> {
-  const elevations: number[] = new Array(coords.length).fill(0)
-
-  for (let i = 0; i < coords.length; i += BATCH_SIZE) {
-    // Throttle: wait between batches to avoid 429
-    if (i > 0) await sleep(300)
-
-    const batch = coords.slice(i, i + BATCH_SIZE)
-    const lats = batch.map(c => c.lat.toFixed(6)).join(',')
-    const lngs = batch.map(c => c.lng.toFixed(6)).join(',')
-
-    const url = `${OPEN_METEO_URL}?latitude=${lats}&longitude=${lngs}`
-
-    const res = await fetchWithRetry(url)
-    if (!res) continue
-
-    try {
-      const data = (await res.json()) as { elevation: number[] }
-      for (let j = 0; j < data.elevation.length; j++) {
-        elevations[i + j] = data.elevation[j]
-      }
-    } catch (err) {
-      console.error('Open-Meteo parse error:', err)
-    }
-  }
-
-  return elevations
+function lngLatToTile(
+  lng: number,
+  lat: number,
+  z: number,
+): { x: number; y: number } {
+  const n = Math.pow(2, z)
+  const x = ((lng + 180) / 360) * n
+  const latRad = (lat * Math.PI) / 180
+  const y = ((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2) * n
+  return { x, y }
 }
 
 /**
- * Generate a grid of real elevation data for the given bounds.
- * Uses a configurable grid resolution (default 20×20 = 400 points).
+ * Pick a zoom level that yields ~2-4 tiles across the bbox: enough pixel
+ * resolution to beat the old 90m Copernicus DEM without firing dozens of
+ * tile fetches. Clamped to MIN/MAX_ZOOM.
  */
+function chooseZoom(bounds: {
+  north: number
+  south: number
+  east: number
+  west: number
+}): number {
+  const latSpan = Math.abs(bounds.north - bounds.south)
+  const lngSpan = Math.abs(bounds.east - bounds.west)
+  const maxSpan = Math.max(latSpan, lngSpan) || 0.01
+  const z = Math.floor(Math.log2(360 / maxSpan)) + 1
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z))
+}
+
+async function fetchTile(
+  x: number,
+  y: number,
+  z: number,
+  token: string,
+): Promise<PNG> {
+  const url = `https://api.mapbox.com/v4/mapbox.terrain-rgb/${z}/${x}/${y}.pngraw?access_token=${token}`
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw new Error(
+      `Mapbox Terrain-RGB ${z}/${x}/${y} returned ${res.status}`,
+    )
+  }
+  const buf = Buffer.from(await res.arrayBuffer())
+  return new Promise((resolve, reject) => {
+    new PNG().parse(buf, (err, data) => {
+      if (err) reject(err)
+      else resolve(data)
+    })
+  })
+}
+
+function decodeElevation(r: number, g: number, b: number): number {
+  return -10000 + (r * 256 * 256 + g * 256 + b) * 0.1
+}
+
 export async function fetchElevationGrid(
   bounds: { north: number; south: number; east: number; west: number },
-  gridSize = 20
+  gridSize = 20,
 ): Promise<ElevationGrid> {
-  const coords: Array<{ lat: number; lng: number }> = []
+  const token = process.env.VITE_MAPBOX_TOKEN
+  if (!token) {
+    throw new Error(
+      'VITE_MAPBOX_TOKEN is not set — required for Mapbox Terrain-RGB elevation data.',
+    )
+  }
+
+  const z = chooseZoom(bounds)
+
+  const nw = lngLatToTile(bounds.west, bounds.north, z)
+  const se = lngLatToTile(bounds.east, bounds.south, z)
+  const xMin = Math.floor(Math.min(nw.x, se.x))
+  const xMax = Math.floor(Math.max(nw.x, se.x))
+  const yMin = Math.floor(Math.min(nw.y, se.y))
+  const yMax = Math.floor(Math.max(nw.y, se.y))
+
+  const numTiles = (xMax - xMin + 1) * (yMax - yMin + 1)
+  if (numTiles > MAX_TILES) {
+    throw new Error(
+      `Elevation bbox too large: would require ${numTiles} tiles at zoom ${z} (max ${MAX_TILES}).`,
+    )
+  }
+
+  console.log(
+    `Mapbox Terrain-RGB: fetching ${numTiles} tile(s) at zoom ${z}`,
+  )
+
+  const tilePromises: Array<Promise<{ x: number; y: number; png: PNG }>> = []
+  for (let tx = xMin; tx <= xMax; tx++) {
+    for (let ty = yMin; ty <= yMax; ty++) {
+      tilePromises.push(
+        fetchTile(tx, ty, z, token).then(png => ({ x: tx, y: ty, png })),
+      )
+    }
+  }
+  const tiles = await Promise.all(tilePromises)
+  const tileMap = new Map<string, PNG>()
+  for (const t of tiles) tileMap.set(`${t.x}/${t.y}`, t.png)
+
+  const points: ElevationPoint[] = []
   const latStep = (bounds.north - bounds.south) / (gridSize - 1)
   const lngStep = (bounds.east - bounds.west) / (gridSize - 1)
 
   for (let row = 0; row < gridSize; row++) {
     for (let col = 0; col < gridSize; col++) {
-      coords.push({
-        lat: bounds.south + row * latStep,
-        lng: bounds.west + col * lngStep,
-      })
+      const lat = bounds.south + row * latStep
+      const lng = bounds.west + col * lngStep
+      const { x: xf, y: yf } = lngLatToTile(lng, lat, z)
+      const tileX = Math.min(xMax, Math.max(xMin, Math.floor(xf)))
+      const tileY = Math.min(yMax, Math.max(yMin, Math.floor(yf)))
+      const png = tileMap.get(`${tileX}/${tileY}`)
+      let elevation = 0
+      if (png) {
+        const px = Math.min(
+          TILE_SIZE - 1,
+          Math.max(0, Math.floor((xf - tileX) * TILE_SIZE)),
+        )
+        const py = Math.min(
+          TILE_SIZE - 1,
+          Math.max(0, Math.floor((yf - tileY) * TILE_SIZE)),
+        )
+        const idx = (py * png.width + px) * 4
+        elevation = decodeElevation(
+          png.data[idx],
+          png.data[idx + 1],
+          png.data[idx + 2],
+        )
+      }
+      points.push({ lat, lng, elevation })
     }
   }
 
-  const elevations = await fetchElevations(coords)
-
-  const points: ElevationPoint[] = coords.map((c, i) => ({
-    lat: c.lat,
-    lng: c.lng,
-    elevation: elevations[i],
-  }))
-
-  const allElev = elevations.filter(e => e !== 0)
-  const minElevation = allElev.length > 0 ? Math.min(...allElev) : 0
-  const maxElevation = allElev.length > 0 ? Math.max(...allElev) : 0
-  const avgElevation =
-    allElev.length > 0 ? allElev.reduce((a, b) => a + b, 0) / allElev.length : 0
+  const validElev = points
+    .map(p => p.elevation)
+    .filter(e => e > -500 && e < 9000)
+  const minElevation = validElev.length ? Math.min(...validElev) : 0
+  const maxElevation = validElev.length ? Math.max(...validElev) : 0
+  const avgElevation = validElev.length
+    ? validElev.reduce((a, b) => a + b, 0) / validElev.length
+    : 0
 
   return {
     points,

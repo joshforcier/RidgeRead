@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@quasar/extras": "^1.18.0",
+    "@types/pngjs": "^6.0.5",
     "cors": "^2.8.6",
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
@@ -20,6 +21,7 @@
     "leaflet.heat": "^0.2.0",
     "openai": "^6.34.0",
     "pinia": "^3.0.4",
+    "pngjs": "^7.0.0",
     "quasar": "^2.19.3",
     "vue": "^3.5.32",
     "vue-router": "^5.0.4"

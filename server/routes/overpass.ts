@@ -31,7 +31,43 @@ interface OverpassElement {
   center?: { lat: number; lon: number }
 }
 
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
+/**
+ * Public Overpass mirrors. The main instance returns 406 / 504 under load,
+ * so we try them in order. The first one that returns a 2xx wins.
+ */
+const OVERPASS_MIRRORS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.fr/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+] as const
+
+// Overpass operators ask that callers identify themselves — requests
+// without a User-Agent are increasingly rate-limited or 406'd.
+const OVERPASS_HEADERS = {
+  'Content-Type': 'application/x-www-form-urlencoded',
+  'User-Agent': 'TerrainIQ/0.1 (+https://github.com/joshforcier/TerrainIQ)',
+  Accept: 'application/json',
+} as const
+
+async function postOverpass(body: string): Promise<unknown | null> {
+  for (const url of OVERPASS_MIRRORS) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: OVERPASS_HEADERS,
+        body,
+      })
+      if (response.ok) {
+        return await response.json()
+      }
+      console.warn(`Overpass ${new URL(url).host} returned ${response.status}`)
+    } catch (err) {
+      console.warn(`Overpass ${new URL(url).host} fetch error:`, err)
+    }
+  }
+  return null
+}
 
 /**
  * Query the Overpass API for land cover features within bounds.
@@ -83,25 +119,15 @@ export async function fetchLandData(bounds: {
 out geom;
 `
 
-  try {
-    const response = await fetch(OVERPASS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `data=${encodeURIComponent(query)}`,
-    })
+  const data = (await postOverpass(`data=${encodeURIComponent(query)}`)) as
+    | { elements: OverpassElement[] }
+    | null
 
-    if (!response.ok) {
-      console.error(`Overpass API returned ${response.status}`)
-      return emptyLandData()
-    }
-
-    const data = await response.json() as { elements: OverpassElement[] }
-    return categorizeElements(data.elements)
-  } catch (err) {
-    console.error('Overpass API error:', err)
-    // Return empty data — don't block POI generation if Overpass is down
+  if (!data) {
+    console.error('All Overpass mirrors failed — returning empty land data')
     return emptyLandData()
   }
+  return categorizeElements(data.elements)
 }
 
 function emptyLandData(): OSMLandData {
