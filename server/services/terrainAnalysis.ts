@@ -58,7 +58,10 @@ export function computeSlopeAspect(
       const slopeRad = Math.atan(Math.sqrt(dzdx * dzdx + dzdy * dzdy))
       const slopeDeg = slopeRad * (180 / Math.PI)
 
-      let aspectDeg = Math.atan2(-dzdx, dzdy) * (180 / Math.PI)
+      // Aspect = compass bearing of the downhill direction. Uphill vector
+      // in (east, north) coords is (dzdx, dzdy); downhill is (-dzdx, -dzdy);
+      // compass bearing of (E, N) = atan2(E, N).
+      let aspectDeg = Math.atan2(-dzdx, -dzdy) * (180 / Math.PI)
       if (aspectDeg < 0) aspectDeg += 360
 
       results.push({
