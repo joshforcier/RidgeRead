@@ -1,19 +1,43 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
+import { useSubscriptionStore } from '@/stores/subscription'
 import { useRouter, useRoute } from 'vue-router'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const subscriptionStore = useSubscriptionStore()
 const router = useRouter()
 const route = useRoute()
 
-const navItems = [
-  { name: 'Dashboard', path: '/app', icon: 'dashboard' },
-  { name: 'Map', path: '/map', icon: 'map' },
-  { name: 'Analysis', path: '/analysis', icon: 'analytics' },
-  { name: 'Settings', path: '/settings', icon: 'settings' },
-]
+const trialBadge = computed<{ short: string; tooltip: string } | null>(() => {
+  if (!subscriptionStore.isOnTrial) return null
+  const days = subscriptionStore.trialDaysLeft
+  const end = subscriptionStore.trialEndDate
+  if (days == null || !end) return null
+
+  const short =
+    days <= 0 ? 'Trial ends today'
+    : days === 1 ? '1 day left'
+    : `${days} days left`
+
+  const endStr = end.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  const tooltip = `Free trial — billing begins ${endStr}`
+
+  return { short, tooltip }
+})
+
+// const navItems = [
+//   { name: 'Dashboard', path: '/app', icon: 'dashboard' },
+//   { name: 'Map', path: '/map', icon: 'map' },
+//   { name: 'Analysis', path: '/analysis', icon: 'analytics' },
+//   { name: 'Settings', path: '/settings', icon: 'settings' },
+// ]
 
 async function handleSignOut() {
   await authStore.signOut()
@@ -41,7 +65,7 @@ async function handleSignOut() {
 
       <q-space />
 
-      <nav class="nav-links">
+      <!-- <nav class="nav-links">
         <router-link
           v-for="item in navItems"
           :key="item.path"
@@ -52,7 +76,18 @@ async function handleSignOut() {
           <q-icon :name="item.icon" size="18px" />
           <span class="nav-label">{{ item.name }}</span>
         </router-link>
-      </nav>
+      </nav> -->
+
+      <!-- Trial badge -->
+      <div
+        v-if="trialBadge"
+        class="trial-badge"
+        :title="trialBadge.tooltip"
+        :aria-label="trialBadge.tooltip"
+      >
+        <q-icon name="schedule" size="13px" />
+        <span class="trial-badge-text">Trial: {{ trialBadge.short }}</span>
+      </div>
 
       <!-- User menu -->
       <div v-if="authStore.isAuthenticated" class="q-ml-md">
@@ -171,6 +206,36 @@ async function handleSignOut() {
   color: #e8c547 !important;
   background: rgba(232, 197, 71, 0.1);
   border: 1px solid rgba(232, 197, 71, 0.15);
+}
+
+/* ─── Trial badge ─── */
+.trial-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #e8c547;
+  background: rgba(232, 197, 71, 0.1);
+  border: 1px solid rgba(232, 197, 71, 0.25);
+  border-radius: 12px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.trial-badge-text {
+  line-height: 1;
+}
+
+@media (max-width: 599px) {
+  .trial-badge-text {
+    display: none;
+  }
+  .trial-badge {
+    padding: 5px 7px;
+  }
 }
 
 /* ─── User ─── */

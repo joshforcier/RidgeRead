@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import MapContainer from '@/components/map/MapContainer.vue'
 import HoverTooltip from '@/components/map/HoverTooltip.vue'
 import InfoPanel from '@/components/map/InfoPanel.vue'
 import PoiDetailPanel from '@/components/map/PoiDetailPanel.vue'
 import PoiHoverCard from '@/components/map/PoiHoverCard.vue'
+import UserPinPopup from '@/components/map/UserPinPopup.vue'
+import SubscribeModal from '@/components/common/SubscribeModal.vue'
+import { useUserPinsStore } from '@/stores/userPins'
+import { useAuthStore } from '@/stores/auth'
+import { useSubscriptionStore } from '@/stores/subscription'
 import type L from 'leaflet'
 import type { HoverScores } from '@/composables/useHoverInfo'
 import { useMapStore, type BaseLayer } from '@/stores/map'
@@ -13,6 +18,41 @@ import { isInElkRange } from '@/utils/elkRange'
 import type { PointOfInterest } from '@/data/pointsOfInterest'
 
 const mapStore = useMapStore()
+const userPinsStore = useUserPinsStore()
+const authStore = useAuthStore()
+const subscriptionStore = useSubscriptionStore()
+
+const subscribeModalOpen = ref(false)
+
+const dropPinDisabled = computed(() => !authStore.isAuthenticated)
+const dropPinActive = computed(() => userPinsStore.dropMode)
+function toggleDropPin() {
+  if (dropPinDisabled.value) return
+  if (userPinsStore.dropMode) {
+    userPinsStore.exitDropMode()
+    return
+  }
+  // Turning ON drop pin → ensure Measure is OFF.
+  if (measuring.value) mapContainerRef.value?.toggleMeasure()
+  userPinsStore.enterDropMode()
+}
+
+function toggleMeasure() {
+  // Turning ON measure → ensure drop pin is OFF.
+  if (!measuring.value && userPinsStore.dropMode) {
+    userPinsStore.exitDropMode()
+  }
+  mapContainerRef.value?.toggleMeasure()
+}
+
+// Esc exits drop mode (UserPinPopup handles Esc on its own when open).
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && userPinsStore.dropMode && !userPinsStore.draft) {
+    userPinsStore.exitDropMode()
+  }
+}
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
 const baseLayerOptions: { label: string; value: BaseLayer; icon: string }[] = [
   { label: 'Streets', value: 'streets', icon: 'map' },
@@ -84,6 +124,16 @@ function cancelSelection() {
 }
 
 function analyzeArea() {
+  // Soft paywall: signed-in users without an active sub get the upsell
+  // modal instead of the API call. While we're still loading the sub state
+  // for an authenticated user, hold off — the snapshot lands within ms.
+  if (authStore.isAuthenticated) {
+    if (subscriptionStore.loading) return
+    if (!subscriptionStore.hasAccess) {
+      subscribeModalOpen.value = true
+      return
+    }
+  }
   mapContainerRef.value?.analyzeSelection()
 }
 
@@ -120,6 +170,8 @@ const keptCount = computed(() => mapStore.keptPois.length)
     <InfoPanel />
     <PoiDetailPanel />
     <PoiHoverCard :map="mapInstance" />
+    <UserPinPopup :map="mapInstance" />
+    <SubscribeModal v-model="subscribeModalOpen" />
 
     <!-- Stepper panel -->
     <div class="stepper-card" :class="{ 'stepper-card--collapsed': stepperCollapsed }">
@@ -255,10 +307,21 @@ const keptCount = computed(() => mapStore.keptPois.length)
       <button
         class="layer-btn"
         :class="{ 'layer-btn--active': measuring }"
-        @click="mapContainerRef?.toggleMeasure()"
+        @click="toggleMeasure"
       >
         <q-icon name="straighten" size="16px" />
         <span class="layer-label">Measure</span>
+      </button>
+      <button
+        class="layer-btn"
+        :class="{ 'layer-btn--active': dropPinActive, 'layer-btn--disabled': dropPinDisabled }"
+        :disabled="dropPinDisabled"
+        :title="dropPinDisabled ? 'Sign in to drop pins' : (dropPinActive ? 'Exit drop mode (Esc)' : 'Drop pin')"
+        :aria-pressed="dropPinActive"
+        @click="toggleDropPin"
+      >
+        <q-icon name="add_location_alt" size="16px" />
+        <span class="layer-label">Drop pin</span>
       </button>
     </div>
 
@@ -647,6 +710,17 @@ const keptCount = computed(() => mapStore.keptPois.length)
   border-color: rgba(232, 197, 71, 0.3);
   background: rgba(232, 197, 71, 0.1);
   color: #e8c547;
+}
+
+.layer-btn--disabled,
+.layer-btn[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.layer-btn--disabled:hover,
+.layer-btn[disabled]:hover {
+  background: transparent;
+  color: #6b7c8d;
 }
 
 @media (max-width: 599px) {

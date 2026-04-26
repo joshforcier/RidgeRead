@@ -92,28 +92,24 @@ const steps = [
   { num: '4', title: 'Hunt Smarter', desc: 'Tap any POI for advice specific to that exact spot, season, and time of day. Toggle behavior layers to understand why elk use that terrain.' },
 ]
 
-const pricingTiers = [
-  {
-    name: 'Free',
-    price: '0',
-    period: '',
-    highlight: false,
-    desc: 'Everything you need to see it in action.',
-    features: [
-      { text: '3 analyses per month', included: true },
-      { text: 'All 5 behavior layers', included: true },
-      { text: 'All 4 base maps', included: true },
-      { text: 'Season & time controls', included: true },
-      { text: 'Save analyzed areas', included: false },
-      { text: 'Offline maps (mobile)', included: false },
-    ],
-    cta: 'Start Free',
-  },
+interface PricingTier {
+  name: string
+  price: string
+  period: string
+  highlight: boolean
+  trial?: string
+  desc: string
+  features: Array<{ text: string; included: boolean }>
+  cta: string
+}
+
+const pricingTiers: PricingTier[] = [
   {
     name: 'Pro',
-    price: '9.99',
+    price: '10',
     period: '/mo',
     highlight: true,
+    trial: '30-day free trial',
     desc: 'For the hunter who scouts year-round.',
     features: [
       { text: '20 analyses per month', included: true },
@@ -123,11 +119,11 @@ const pricingTiers = [
       { text: 'Save & revisit areas', included: true },
       { text: 'Offline maps (mobile)', included: true },
     ],
-    cta: 'Go Pro',
+    cta: 'Start Free Trial',
   },
   {
     name: 'Guide',
-    price: '24.99',
+    price: '25',
     period: '/mo',
     highlight: false,
     desc: 'For outfitters, professional guides, and serious hunters.',
@@ -305,7 +301,7 @@ const pricingTiers = [
       <div class="section-inner">
         <h2 class="section-heading">Simple Pricing</h2>
         <p class="section-sub">
-          Start free. Upgrade when you're hooked.
+          Try Pro free for 30 days. Cancel anytime.
         </p>
         <div class="pricing-grid">
           <div
@@ -316,11 +312,13 @@ const pricingTiers = [
           >
             <div v-if="tier.highlight" class="pricing-badge">MOST POPULAR</div>
             <h3 class="pricing-name">{{ tier.name }}</h3>
+            <div v-if="tier.trial" class="pricing-trial">{{ tier.trial }}</div>
             <div class="pricing-price">
               <span class="pricing-dollar">$</span>
               <span class="pricing-amount">{{ tier.price }}</span>
               <span v-if="tier.period" class="pricing-period">{{ tier.period }}</span>
             </div>
+            <p v-if="tier.trial" class="pricing-trial-note">then {{ '$' + tier.price + tier.period }} after the trial</p>
             <p class="pricing-desc">{{ tier.desc }}</p>
             <ul class="pricing-features">
               <li
@@ -363,7 +361,7 @@ const pricingTiers = [
           color="amber"
           text-color="dark"
           icon="login"
-          label="Start Analyzing Free"
+          label="Start Your 30-Day Free Trial"
           no-caps
           unelevated
           size="lg"
@@ -709,10 +707,11 @@ const pricingTiers = [
 }
 
 .pricing-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 24px;
-  align-items: start;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 28px;
 }
 
 .pricing-card {
@@ -723,13 +722,14 @@ const pricingTiers = [
   padding: 36px 28px 28px;
   display: flex;
   flex-direction: column;
+  flex: 0 1 360px;
+  max-width: 380px;
 }
 
 .pricing-card--highlight {
   border-color: #e8c547;
   background: #131e2b;
-  box-shadow: 0 0 40px rgba(232, 197, 71, 0.06);
-  transform: scale(1.03);
+  box-shadow: 0 0 40px rgba(232, 197, 71, 0.08);
 }
 
 .pricing-badge {
@@ -780,6 +780,26 @@ const pricingTiers = [
   font-size: 15px;
   color: #6b7c8d;
   font-weight: 500;
+}
+
+.pricing-trial {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #e8c547;
+  background: rgba(232, 197, 71, 0.1);
+  border: 1px solid rgba(232, 197, 71, 0.25);
+  padding: 4px 10px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.pricing-trial-note {
+  font-size: 12px;
+  color: #6b7c8d;
+  margin: 4px 0 16px;
 }
 
 .pricing-desc {
@@ -888,7 +908,6 @@ const pricingTiers = [
   .season-cards { grid-template-columns: 1fr; }
   .steps-row { grid-template-columns: 1fr 1fr; }
   .data-grid { grid-template-columns: 1fr 1fr; }
-  .pricing-grid { grid-template-columns: 1fr; }
-  .pricing-card--highlight { transform: none; }
+  .pricing-grid { gap: 16px; }
 }
 </style>
