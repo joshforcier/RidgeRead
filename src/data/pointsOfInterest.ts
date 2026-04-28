@@ -5,7 +5,7 @@ export interface PointOfInterest {
   name: string
   lat: number
   lng: number
-  type: 'meadow' | 'drainage' | 'wallow' | 'saddle' | 'spring'
+  type: 'meadow' | 'transition-zone' | 'drainage' | 'wallow' | 'saddle' | 'spring' | 'bench' | 'ridge' | 'finger-ridge'
   relatedBehaviors: BehaviorLayer[]
   description: string
   /** Verified from real elevation grid (server-side post-processing) */
@@ -21,10 +21,14 @@ export interface PointOfInterest {
 
 export const poiTypeLabels: Record<PointOfInterest['type'], string> = {
   meadow: 'Meadow',
+  'transition-zone': 'Transition Zone',
   drainage: 'Drainage',
   wallow: 'Wallow',
   saddle: 'Saddle',
   spring: 'Spring',
+  bench: 'Bench',
+  ridge: 'Ridge',
+  'finger-ridge': 'Finger Ridge',
 }
 
 /**

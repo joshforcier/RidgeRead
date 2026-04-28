@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import MapContainer from '@/components/map/MapContainer.vue'
 import HoverTooltip from '@/components/map/HoverTooltip.vue'
 import InfoPanel from '@/components/map/InfoPanel.vue'
@@ -7,10 +7,12 @@ import PoiDetailPanel from '@/components/map/PoiDetailPanel.vue'
 import PoiHoverCard from '@/components/map/PoiHoverCard.vue'
 import UserPinPopup from '@/components/map/UserPinPopup.vue'
 import SubscribeModal from '@/components/common/SubscribeModal.vue'
+import LimitReachedModal from '@/components/common/LimitReachedModal.vue'
 import { useUserPinsStore } from '@/stores/userPins'
 import { useAuthStore } from '@/stores/auth'
 import { useSubscriptionStore } from '@/stores/subscription'
-import type L from 'leaflet'
+import { useScoutWaypointsStore } from '@/stores/scoutWaypoints'
+import L from 'leaflet'
 import type { HoverScores } from '@/composables/useHoverInfo'
 import { useMapStore, type BaseLayer } from '@/stores/map'
 import { downloadGpx } from '@/utils/exportGpx'
@@ -21,8 +23,29 @@ const mapStore = useMapStore()
 const userPinsStore = useUserPinsStore()
 const authStore = useAuthStore()
 const subscriptionStore = useSubscriptionStore()
+const scoutWaypointsStore = useScoutWaypointsStore()
+
+// ─── GPX import ───
+const gpxFileInput = ref<HTMLInputElement | null>(null)
+function openGpxFilePicker() {
+  if (!authStore.isAuthenticated) return
+  gpxFileInput.value?.click()
+}
+async function onGpxFileChosen(e: Event) {
+  const target = e.target as HTMLInputElement
+  const file = target.files?.[0]
+  // Reset so re-selecting the same file fires `change` again.
+  if (target) target.value = ''
+  if (!file) return
+  try {
+    await scoutWaypointsStore.importGpx(file)
+  } catch {
+    /* error message lives on store.importError */
+  }
+}
 
 const subscribeModalOpen = ref(false)
+const limitReachedModalOpen = ref(false)
 
 const dropPinDisabled = computed(() => !authStore.isAuthenticated)
 const dropPinActive = computed(() => userPinsStore.dropMode)
@@ -77,6 +100,16 @@ const measuring = computed(() => mapContainerRef.value?.measureActive ?? false)
 
 const aiLoading = computed(() => mapContainerRef.value?.loading ?? false)
 const aiError = computed(() => mapContainerRef.value?.error ?? null)
+const aiErrorCode = computed(() => mapContainerRef.value?.errorCode ?? null)
+
+// When the analyze endpoint reports a quota exhaustion, surface the
+// dedicated upgrade modal instead of letting the generic error toast linger.
+watch(aiErrorCode, (code) => {
+  if (code === 'LIMIT_EXCEEDED') {
+    limitReachedModalOpen.value = true
+    mapContainerRef.value?.clearError()
+  }
+})
 const hasResults = computed(() => mapContainerRef.value?.hasResults ?? false)
 const aiPoisCount = computed(() => mapContainerRef.value?.pois?.length ?? 0)
 const fromCache = computed(() => mapContainerRef.value?.fromCache ?? false)
@@ -161,6 +194,108 @@ function clearKept() {
 }
 
 const keptCount = computed(() => mapStore.keptPois.length)
+
+// ─── Dev: inspect-point tool ───
+interface InspectFeature { detected: boolean; reason: string }
+interface InspectResult {
+  point: { lat: number; lng: number; elevation: number; elevationFt: number; slope: number; aspect: string }
+  neighbors: Record<'N' | 'S' | 'E' | 'W' | 'NE' | 'NW' | 'SE' | 'SW', number>
+  features: Record<'saddle' | 'ridge' | 'drainage' | 'bench' | 'fingerRidge', InspectFeature>
+}
+
+const inspectExpanded = ref(false)
+const inspectCoords = ref('')
+const inspectSpacing = ref<number>(200)
+const inspectLoading = ref(false)
+const inspectError = ref<string | null>(null)
+const inspectResult = ref<InspectResult | null>(null)
+
+/**
+ * Parse "lat, lng" input. Tolerant of comma OR whitespace separators and
+ * stray spacing — pasting "46.61943, -111.42553", "46.61943,-111.42553",
+ * or "46.61943 -111.42553" all parse identically.
+ */
+function parseCoords(s: string): { lat: number; lng: number } | null {
+  const parts = s.trim().split(/[\s,]+/).filter(Boolean)
+  if (parts.length !== 2) return null
+  const lat = parseFloat(parts[0])
+  const lng = parseFloat(parts[1])
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  return { lat, lng }
+}
+
+// Ephemeral Leaflet marker shown at the inspected coordinates. Not persisted —
+// recreated each run, removed on unmount. Visually distinct from POI hexes
+// and user-pin teardrops (cyan crosshair) so it can't be confused for either.
+let inspectMarker: L.Marker | null = null
+
+function placeInspectMarker(lat: number, lng: number) {
+  const m = mapInstance.value
+  if (!m) return
+  if (inspectMarker) {
+    inspectMarker.remove()
+    inspectMarker = null
+  }
+  const icon = L.divIcon({
+    className: 'inspect-marker-leaflet',
+    html: `
+      <div class="inspect-marker">
+        <svg width="34" height="34" viewBox="0 0 34 34">
+          <circle cx="17" cy="17" r="14" fill="rgba(74,222,222,0.12)" stroke="#4adede" stroke-width="2" />
+          <line x1="17" y1="2" x2="17" y2="9" stroke="#4adede" stroke-width="2" />
+          <line x1="17" y1="25" x2="17" y2="32" stroke="#4adede" stroke-width="2" />
+          <line x1="2" y1="17" x2="9" y2="17" stroke="#4adede" stroke-width="2" />
+          <line x1="25" y1="17" x2="32" y2="17" stroke="#4adede" stroke-width="2" />
+          <circle cx="17" cy="17" r="2" fill="#4adede" />
+        </svg>
+      </div>
+    `,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+  })
+  inspectMarker = L.marker([lat, lng], { icon, interactive: false, zIndexOffset: 1000 }).addTo(m)
+  // Pan but don't zoom — keep the user's current zoom level so the dev
+  // can see the inspected point in the context they were already viewing.
+  m.panTo([lat, lng], { animate: true })
+}
+
+async function runInspect() {
+  const parsed = parseCoords(inspectCoords.value)
+  if (!parsed) {
+    inspectError.value = 'Could not parse coords. Use "lat, lng" e.g. 46.61943, -111.42553'
+    return
+  }
+  const { lat, lng } = parsed
+  inspectLoading.value = true
+  inspectError.value = null
+  inspectResult.value = null
+  // Drop the marker immediately so the user gets visual feedback even
+  // before the elevation fetch completes.
+  placeInspectMarker(lat, lng)
+  try {
+    const idToken = await authStore.user?.getIdToken().catch(() => null)
+    if (!idToken) throw new Error('Sign in required')
+    const res = await fetch('/api/inspect-point', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ lat, lng, cellSpacingM: inspectSpacing.value }),
+    })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(body.error || `Inspection failed (${res.status})`)
+    inspectResult.value = body as InspectResult
+  } catch (err: unknown) {
+    inspectError.value = err instanceof Error ? err.message : 'Inspection failed'
+  } finally {
+    inspectLoading.value = false
+  }
+}
+
+onBeforeUnmount(() => {
+  if (inspectMarker) {
+    inspectMarker.remove()
+    inspectMarker = null
+  }
+})
 </script>
 
 <template>
@@ -172,6 +307,7 @@ const keptCount = computed(() => mapStore.keptPois.length)
     <PoiHoverCard :map="mapInstance" />
     <UserPinPopup :map="mapInstance" />
     <SubscribeModal v-model="subscribeModalOpen" />
+    <LimitReachedModal v-model="limitReachedModalOpen" />
 
     <!-- Stepper panel -->
     <div class="stepper-card" :class="{ 'stepper-card--collapsed': stepperCollapsed }">
@@ -292,6 +428,131 @@ const keptCount = computed(() => mapStore.keptPois.length)
           <button class="kept-pois-clear" @click="clearKept" title="Clear everything: analysis, selection, saved POIs, deleted POIs">
             Clear All
           </button>
+        </div>
+
+        <!-- GPX import: drop pins for waypoints + grade them through existing POI logic -->
+        <div class="gpx-section">
+          <div class="gpx-row">
+            <button
+              class="gpx-btn"
+              type="button"
+              :disabled="!authStore.isAuthenticated || scoutWaypointsStore.importing"
+              @click="openGpxFilePicker"
+            >
+              <q-icon name="upload_file" size="14px" />
+              <span v-if="scoutWaypointsStore.importing">
+                Analyzing
+                <template v-if="scoutWaypointsStore.importProgress">
+                  ({{ scoutWaypointsStore.importProgress.done }} / {{ scoutWaypointsStore.importProgress.total }})
+                </template>
+                …
+              </span>
+              <span v-else>Import GPX</span>
+            </button>
+            <button
+              v-if="scoutWaypointsStore.waypoints.length > 0"
+              class="gpx-clear"
+              type="button"
+              :disabled="scoutWaypointsStore.importing"
+              :title="`Delete all ${scoutWaypointsStore.waypoints.length} imported waypoints`"
+              @click="scoutWaypointsStore.clearAll"
+            >
+              <q-icon name="delete_sweep" size="14px" />
+            </button>
+          </div>
+          <p v-if="scoutWaypointsStore.importError" class="gpx-error">
+            {{ scoutWaypointsStore.importError }}
+          </p>
+          <p v-else-if="scoutWaypointsStore.waypoints.length > 0" class="gpx-status">
+            {{ scoutWaypointsStore.waypoints.length }} imported waypoint{{ scoutWaypointsStore.waypoints.length === 1 ? '' : 's' }} on the map
+          </p>
+          <input
+            ref="gpxFileInput"
+            type="file"
+            accept=".gpx,application/gpx+xml,application/xml,text/xml"
+            style="display: none"
+            @change="onGpxFileChosen"
+          />
+        </div>
+
+        <!-- Dev: inspect a single coordinate's terrain classification -->
+        <div class="inspect-section">
+          <button class="inspect-toggle" type="button" @click="inspectExpanded = !inspectExpanded">
+            <q-icon :name="inspectExpanded ? 'expand_less' : 'expand_more'" size="14px" />
+            <span>Inspect point (dev)</span>
+          </button>
+          <div v-show="inspectExpanded" class="inspect-body">
+            <div class="inspect-row">
+              <input
+                v-model="inspectCoords"
+                class="inspect-input"
+                type="text"
+                inputmode="decimal"
+                placeholder="lat, lng (e.g. 46.61943, -111.42553)"
+                @keydown.enter="runInspect"
+              />
+              <button
+                class="inspect-go"
+                type="button"
+                :disabled="inspectLoading"
+                @click="runInspect"
+              >
+                <q-spinner v-if="inspectLoading" size="14px" />
+                <span v-else>Run</span>
+              </button>
+            </div>
+            <div class="inspect-spacing-row">
+              <label class="inspect-spacing-label">cell spacing</label>
+              <select v-model.number="inspectSpacing" class="inspect-input">
+                <option :value="100">100m (very fine)</option>
+                <option :value="200">200m (default — captures sharp peaks)</option>
+                <option :value="400">400m (matches typical user analysis)</option>
+                <option :value="600">600m</option>
+                <option :value="800">800m (coarse)</option>
+              </select>
+            </div>
+            <p v-if="inspectError" class="inspect-error">{{ inspectError }}</p>
+            <div v-if="inspectResult" class="inspect-result">
+              <div class="inspect-pt">
+                <span>{{ inspectResult.point.elevationFt.toLocaleString() }} ft</span>
+                <span>·</span>
+                <span>{{ inspectResult.point.slope.toFixed(1) }}°</span>
+                <span>·</span>
+                <span>{{ inspectResult.point.aspect }}</span>
+              </div>
+              <ul class="inspect-features">
+                <li
+                  v-for="(f, key) in inspectResult.features"
+                  :key="key"
+                  :class="['inspect-feat', f.detected ? 'inspect-feat--yes' : 'inspect-feat--no']"
+                >
+                  <q-icon :name="f.detected ? 'check_circle' : 'cancel'" size="12px" />
+                  <span class="inspect-feat-name">{{ key }}</span>
+                  <span class="inspect-feat-reason">{{ f.reason }}</span>
+                </li>
+              </ul>
+              <details class="inspect-neighbors">
+                <summary>neighbor elevations (m)</summary>
+                <table>
+                  <tr>
+                    <td>{{ inspectResult.neighbors.NW.toFixed(0) }}</td>
+                    <td>{{ inspectResult.neighbors.N.toFixed(0) }}</td>
+                    <td>{{ inspectResult.neighbors.NE.toFixed(0) }}</td>
+                  </tr>
+                  <tr>
+                    <td>{{ inspectResult.neighbors.W.toFixed(0) }}</td>
+                    <td class="inspect-self">{{ inspectResult.point.elevation.toFixed(0) }}</td>
+                    <td>{{ inspectResult.neighbors.E.toFixed(0) }}</td>
+                  </tr>
+                  <tr>
+                    <td>{{ inspectResult.neighbors.SW.toFixed(0) }}</td>
+                    <td>{{ inspectResult.neighbors.S.toFixed(0) }}</td>
+                    <td>{{ inspectResult.neighbors.SE.toFixed(0) }}</td>
+                  </tr>
+                </table>
+              </details>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -527,6 +788,230 @@ const keptCount = computed(() => mapStore.keptPois.length)
   line-height: 1.4;
 }
 
+/* ─── GPX import ─── */
+.gpx-section {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid #1e2d3d;
+}
+
+.gpx-row {
+  display: flex;
+  gap: 6px;
+}
+
+.gpx-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #c8d6e5;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #1e2d3d;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.gpx-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: #2c4055;
+  color: #fff;
+}
+.gpx-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.gpx-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.gpx-clear:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.1);
+}
+.gpx-clear:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.gpx-error {
+  font-size: 11px;
+  color: #ff8a8a;
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+
+.gpx-status {
+  font-size: 10.5px;
+  color: #6b7c8d;
+  margin: 6px 0 0;
+}
+
+/* ─── Dev: Inspect-point panel ─── */
+.inspect-section {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid #1e2d3d;
+}
+
+.inspect-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  background: transparent;
+  border: none;
+  color: #6b7c8d;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  font-family: inherit;
+}
+.inspect-toggle:hover { color: #c8d6e5; }
+
+.inspect-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.inspect-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px;
+}
+
+.inspect-spacing-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inspect-spacing-label {
+  font-size: 10px;
+  color: #6b7c8d;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.inspect-spacing-row .inspect-input {
+  flex: 1;
+}
+
+.inspect-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid #1e2d3d;
+  border-radius: 5px;
+  color: #c8d6e5;
+  outline: none;
+  min-width: 0;
+}
+.inspect-input:focus { border-color: #4a90e2; }
+
+.inspect-go {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #4a90e2;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.inspect-go:hover:not(:disabled) { background: #3b7cc4; }
+.inspect-go:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.inspect-error {
+  font-size: 11px;
+  color: #ff8a8a;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.inspect-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.inspect-pt {
+  display: flex;
+  gap: 6px;
+  color: #c8d6e5;
+  font-weight: 600;
+}
+
+.inspect-features {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.inspect-feat {
+  display: grid;
+  grid-template-columns: 14px 86px 1fr;
+  align-items: start;
+  gap: 6px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: #8899aa;
+}
+
+.inspect-feat--yes { color: #8fdaa3; }
+.inspect-feat--no { color: #6b7c8d; }
+
+.inspect-feat-name {
+  font-weight: 700;
+  text-transform: lowercase;
+}
+.inspect-feat-reason {
+  font-family: inherit;
+  word-break: break-word;
+}
+
+.inspect-neighbors {
+  font-size: 10px;
+  color: #7a8d9c;
+}
+.inspect-neighbors summary {
+  cursor: pointer;
+  user-select: none;
+}
+.inspect-neighbors table {
+  margin: 4px 0 0;
+  border-collapse: collapse;
+}
+.inspect-neighbors td {
+  padding: 3px 8px;
+  text-align: center;
+  border: 1px solid #1e2d3d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.inspect-neighbors .inspect-self {
+  background: rgba(74, 144, 226, 0.12);
+  color: #c8d6e5;
+  font-weight: 700;
+}
+
 .kept-pois-row {
   display: flex;
   align-items: center;
@@ -734,5 +1219,22 @@ const keptCount = computed(() => mapStore.keptPois.length)
   .layer-btn {
     padding: 6px 8px;
   }
+}
+</style>
+
+<!-- Unscoped: Leaflet divIcon HTML lives outside Vue's scope-id rewrites. -->
+<style>
+.inspect-marker-leaflet {
+  background: transparent;
+  border: none;
+}
+.inspect-marker {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));
+  animation: inspect-marker-pulse 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes inspect-marker-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: 0.85; }
 }
 </style>

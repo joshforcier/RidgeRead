@@ -30,5 +30,6 @@ export interface SavedAnalysis {
   season: Season
   bufferMiles: number
   combos: Record<string, PointOfInterest[]>
+  cacheVersion?: number
   createdAt: number
 }

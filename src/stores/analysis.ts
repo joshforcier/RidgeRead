@@ -19,6 +19,7 @@ import type { Season } from '@/data/elkBehavior'
 import type { PointOfInterest } from '@/data/pointsOfInterest'
 
 const OVERLAP_THRESHOLD = 0.8
+const CACHE_SCHEMA_VERSION = 8
 
 function bboxIntersect(a: AnalysisBounds, b: AnalysisBounds): AnalysisBounds | null {
   const north = Math.min(a.north, b.north)
@@ -75,6 +76,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
           season: data.season,
           bufferMiles: data.bufferMiles,
           combos: data.combos,
+          cacheVersion: data.cacheVersion ?? 1,
           createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
         } as SavedAnalysis
       })
@@ -105,6 +107,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
         season: params.season,
         bufferMiles: params.bufferMiles,
         combos: params.combos,
+        cacheVersion: CACHE_SCHEMA_VERSION,
         createdAt: serverTimestamp(),
       })
       const saved: SavedAnalysis = {
@@ -114,6 +117,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
         season: params.season,
         bufferMiles: params.bufferMiles,
         combos: params.combos,
+        cacheVersion: CACHE_SCHEMA_VERSION,
         createdAt: Date.now(),
       }
       savedAnalyses.value.push(saved)
@@ -129,6 +133,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     let best: SavedAnalysis | null = null
     let bestRatio = OVERLAP_THRESHOLD
     for (const a of savedAnalyses.value) {
+      if ((a.cacheVersion ?? 1) !== CACHE_SCHEMA_VERSION) continue
       if (a.season !== season) continue
       const ratio = overlapRatio(a.bounds, bounds)
       if (ratio >= bestRatio) {

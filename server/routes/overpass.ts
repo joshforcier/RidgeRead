@@ -3,9 +3,13 @@
  * Used to make AI POI placement land-aware.
  */
 
+export type PlaceKind = 'city' | 'town' | 'village' | 'hamlet'
+
 export interface OSMFeature {
-  type: 'road' | 'trail' | 'building' | 'water' | 'forest' | 'meadow' | 'ridge' | 'stream' | 'town'
+  type: 'road' | 'trail' | 'building' | 'water' | 'forest' | 'meadow' | 'regrowth' | 'ridge' | 'stream' | 'town'
   name?: string
+  /** Only set when `type === 'town'`. Lets downstream code apply settlement-size-aware buffers. */
+  placeKind?: PlaceKind
   geometry: Array<{ lat: number; lng: number }>
 }
 
@@ -16,6 +20,7 @@ export interface OSMLandData {
   water: OSMFeature[]
   forests: OSMFeature[]
   meadows: OSMFeature[]
+  regrowth: OSMFeature[]
   ridges: OSMFeature[]
   streams: OSMFeature[]
   towns: OSMFeature[]
@@ -85,7 +90,7 @@ export async function fetchLandData(bounds: {
   const townBuffer = 0.072
   const townBbox = `${bounds.south - townBuffer},${bounds.west - townBuffer * 1.4},${bounds.north + townBuffer},${bounds.east + townBuffer * 1.4}`
 
-  // Query for: roads, trails/paths, buildings, water bodies, forests, meadows, ridges, streams, towns
+  // Query for: roads, trails/paths, buildings, water bodies, forests, meadows/regrowth, ridges, streams, towns
   const query = `
 [out:json][timeout:60][maxsize:10485760];
 (
@@ -110,6 +115,15 @@ export async function fetchLandData(bounds: {
   // Meadows/grassland
   way["landuse"~"^(meadow|grass)$"](${bbox});
   way["natural"="grassland"](${bbox});
+  way["landcover"~"^(grass|herbaceous)$"](${bbox});
+  // Burn/clearcut/regrowth proxies. OSM fire history coverage is patchy, so
+  // these are treated as open regrowth only when paired with nearby timber.
+  way["natural"~"^(scrub|heath)$"](${bbox});
+  relation["natural"~"^(scrub|heath)$"](${bbox});
+  way["landuse"~"^(clearcut|logging)$"](${bbox});
+  relation["landuse"~"^(clearcut|logging)$"](${bbox});
+  way["landcover"~"^(scrub|shrubs|brush)$"](${bbox});
+  relation["landcover"~"^(scrub|shrubs|brush)$"](${bbox});
   // Ridges/saddles
   node["natural"~"^(ridge|saddle|peak)$"](${bbox});
   way["natural"="ridge"](${bbox});
@@ -138,6 +152,7 @@ function emptyLandData(): OSMLandData {
     water: [],
     forests: [],
     meadows: [],
+    regrowth: [],
     ridges: [],
     streams: [],
     towns: [],
@@ -156,6 +171,7 @@ function categorizeElements(elements: OverpassElement[]): OSMLandData {
     const highway = tags.highway
     const natural = tags.natural
     const landuse = tags.landuse
+    const landcover = tags.landcover
     const waterway = tags.waterway
     const building = tags.building
 
@@ -174,12 +190,27 @@ function categorizeElements(elements: OverpassElement[]): OSMLandData {
       data.streams.push({ type: 'stream', name, geometry: geom })
     } else if (landuse === 'forest' || natural === 'wood') {
       data.forests.push({ type: 'forest', name, geometry: geom })
-    } else if (landuse === 'meadow' || landuse === 'grass' || natural === 'grassland') {
+    } else if (landuse === 'meadow' || landuse === 'grass' || natural === 'grassland' || landcover === 'grass' || landcover === 'herbaceous') {
       data.meadows.push({ type: 'meadow', name, geometry: geom })
+    } else if (
+      natural === 'scrub' ||
+      natural === 'heath' ||
+      landuse === 'clearcut' ||
+      landuse === 'logging' ||
+      landcover === 'scrub' ||
+      landcover === 'shrubs' ||
+      landcover === 'brush'
+    ) {
+      data.regrowth.push({ type: 'regrowth', name, geometry: geom })
     } else if (natural === 'ridge' || natural === 'saddle' || natural === 'peak') {
       data.ridges.push({ type: 'ridge', name, geometry: geom })
     } else if (tags.place && ['city', 'town', 'village', 'hamlet'].includes(tags.place)) {
-      data.towns.push({ type: 'town', name, geometry: geom })
+      data.towns.push({
+        type: 'town',
+        name,
+        placeKind: tags.place as PlaceKind,
+        geometry: geom,
+      })
     }
   }
 
@@ -239,6 +270,11 @@ export function summarizeLandData(data: OSMLandData): string {
   if (data.meadows.length > 0) {
     const named = data.meadows.filter(m => m.name).map(m => m.name)
     lines.push(`MEADOWS/GRASSLAND (${data.meadows.length}): ${named.length > 0 ? named.slice(0, 5).join(', ') : 'open grassy areas'}`)
+  }
+
+  if (data.regrowth.length > 0) {
+    const named = data.regrowth.filter(r => r.name).map(r => r.name)
+    lines.push(`REGROWTH / BURN-CLEARCUT PROXIES (${data.regrowth.length}): ${named.length > 0 ? named.slice(0, 5).join(', ') : 'scrub/heath/clearcut-style openings'}`)
   }
 
   if (data.ridges.length > 0) {

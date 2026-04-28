@@ -88,7 +88,12 @@ function decodeElevation(r: number, g: number, b: number): number {
   return -10000 + (r * 256 * 256 + g * 256 + b) * 0.1
 }
 
-export async function fetchElevationGrid(
+/**
+ * Mapbox Terrain-RGB implementation. Used directly for non-US bboxes, and
+ * as the fallback when USGS 3DEP fails (network error, nodata-heavy grid,
+ * or coverage gap).
+ */
+export async function fetchElevationGridMapbox(
   bounds: { north: number; south: number; east: number; west: number },
   gridSize = 20,
 ): Promise<ElevationGrid> {
@@ -181,4 +186,41 @@ export async function fetchElevationGrid(
     maxElevation,
     avgElevation,
   }
+}
+
+/**
+ * Public entry point. Routes to USGS 3DEP for US bboxes (LiDAR-derived,
+ * sub-meter vertical accuracy in most of CONUS), falls back to Mapbox
+ * Terrain-RGB on any 3DEP failure or for non-US areas.
+ *
+ * The signature and return type are unchanged from the previous
+ * Mapbox-only implementation, so callers don't need to know which source
+ * answered.
+ */
+export async function fetchElevationGrid(
+  bounds: { north: number; south: number; east: number; west: number },
+  gridSize = 20,
+): Promise<ElevationGrid> {
+  // Lazy imports keep the Mapbox path free of `geotiff` overhead when
+  // analyses are outside US coverage.
+  const { isInUSCoverage, fetchElevationGrid3DEP } = await import('./elevation3DEP.js')
+
+  if (isInUSCoverage(bounds)) {
+    try {
+      const grid = await fetchElevationGrid3DEP(bounds, gridSize)
+      console.log(
+        `Elevation source: USGS 3DEP (${grid.minElevation.toFixed(0)}–${grid.maxElevation.toFixed(0)} m)`,
+      )
+      return grid
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.warn(`USGS 3DEP failed, falling back to Mapbox: ${msg}`)
+    }
+  }
+
+  const grid = await fetchElevationGridMapbox(bounds, gridSize)
+  console.log(
+    `Elevation source: Mapbox Terrain-RGB (${grid.minElevation.toFixed(0)}–${grid.maxElevation.toFixed(0)} m)`,
+  )
+  return grid
 }

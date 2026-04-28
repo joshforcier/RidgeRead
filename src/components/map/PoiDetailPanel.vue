@@ -8,6 +8,7 @@ import {
   gradeColor,
   type EnabledLayers,
 } from '@/composables/usePoiGrading'
+import CoordinateChip from '@/components/common/CoordinateChip.vue'
 
 const mapStore = useMapStore()
 
@@ -63,6 +64,7 @@ function deletePoi() {
         </button>
       </header>
 
+      <div class="poi-scroll">
       <!-- Grade hero -->
       <section class="grade-section">
         <div class="grade-row">
@@ -84,6 +86,14 @@ function deletePoi() {
           />
         </div>
       </section>
+
+      <!-- Coordinates (click to copy) -->
+      <div class="coord-row">
+        <CoordinateChip
+          :lat="mapStore.pinnedPoi.lat"
+          :lng="mapStore.pinnedPoi.lng"
+        />
+      </div>
 
       <!-- Meta callouts -->
       <section class="meta-grid">
@@ -168,6 +178,7 @@ function deletePoi() {
       <p class="poi-disclaimer">
         High-probability terrain — verify with sign, wind, and conditions on the ground.
       </p>
+      </div>
     </div>
   </transition>
 </template>
@@ -188,6 +199,32 @@ function deletePoi() {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
+}
+
+/* Pinned header + scrollable body — without min-height:0 the flex child
+   refuses to shrink below its content height and overflow-y has nothing
+   to scroll against. */
+.poi-detail-panel > .poi-header {
+  flex: 0 0 auto;
+}
+.poi-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.poi-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.poi-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.poi-scroll::-webkit-scrollbar-thumb {
+  background: rgba(200, 214, 229, 0.15);
+  border-radius: 4px;
+}
+.poi-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(200, 214, 229, 0.25);
 }
 
 /* ─── Header ─── */
@@ -311,6 +348,12 @@ function deletePoi() {
   height: 100%;
   border-radius: 2px;
   transition: width 300ms ease-out;
+}
+
+/* ─── Coordinate row ─── */
+.coord-row {
+  padding: 0 18px 14px;
+  display: flex;
 }
 
 /* ─── Meta grid ─── */

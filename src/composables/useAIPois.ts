@@ -26,6 +26,7 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
 
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const errorCode = ref<string | null>(null)
   const analyzedArea = ref<AnalyzedArea | null>(null)
   /** True when the current results came from cache (not a fresh API call) */
   const fromCache = ref(false)
@@ -56,6 +57,7 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
 
     loading.value = true
     error.value = null
+    errorCode.value = null
     fromCache.value = false
 
     try {
@@ -69,9 +71,18 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
         return
       }
 
+      // The /api/generate-pois endpoint requires a Firebase ID token.
+      const idToken = await authStore.user?.getIdToken().catch(() => null)
+      if (!idToken) {
+        throw new Error('Sign in required to run an analysis')
+      }
+
       const res = await fetch('/api/generate-pois', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
         body: JSON.stringify({
           bounds: selectionBounds,
           season: mapStore.season,
@@ -81,6 +92,14 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
+        if (res.status === 402 && body.code === 'LIMIT_EXCEEDED') {
+          // Decorate the Error so callers (MapView) can branch on it.
+          const limitErr = new Error(
+            body.error || 'Monthly analysis limit reached.',
+          ) as Error & { code?: string }
+          limitErr.code = 'LIMIT_EXCEEDED'
+          throw limitErr
+        }
         throw new Error(body.error || `Server error: ${res.status}`)
       }
 
@@ -103,6 +122,7 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
       }
     } catch (err: unknown) {
       error.value = err instanceof Error ? err.message : 'Failed to generate POIs'
+      errorCode.value = (err as { code?: string } | null)?.code ?? null
       console.error('AI POI generation failed:', err)
     } finally {
       loading.value = false
@@ -113,8 +133,14 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
     allCombos.value = {}
     analyzedArea.value = null
     error.value = null
+    errorCode.value = null
     fromCache.value = false
     mapStore.unlockSeason()
+  }
+
+  function clearError() {
+    error.value = null
+    errorCode.value = null
   }
 
   return {
@@ -123,9 +149,11 @@ export function useAIPois(map: ShallowRef<L.Map | null>) {
     hasResults,
     loading,
     error,
+    errorCode,
     analyzedArea,
     fromCache,
     generatePOIs,
     clearPOIs,
+    clearError,
   }
 }

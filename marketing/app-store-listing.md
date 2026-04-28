@@ -22,7 +22,7 @@ RidgeRead analyzes real terrain data to show you where elk are feeding, bedding,
 This isn't another topo map with waypoints. RidgeRead pulls actual USGS elevation data, computes slope and aspect for every feature in your area, maps real land cover from satellite data (streams, meadows, timber stands, roads), then uses AI to identify the specific terrain features that hold elk.
 
 **HOW IT WORKS**
-1. Drop a 5-mile box on any terrain in elk country
+1. Drop a 2-mile box on any terrain in elk country
 2. Select your season (Rut, Post-Rut, Late Season) and time of day
 3. Tap Analyze — real terrain data is pulled and scored in seconds
 4. Get AI-generated points of interest placed on real terrain features, each with tactical hunting advice

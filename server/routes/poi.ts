@@ -1,4 +1,4 @@
-import type { Request, Response } from 'express'
+import type { Response } from 'express'
 import OpenAI from 'openai'
 import {
   fetchLandData,
@@ -12,9 +12,15 @@ import {
   analyzeTerrainForPrompt,
   formatFeaturesForPrompt,
   computeSlopeAspect,
+  inspectTerrainAt,
+  type TerrainAnalysis,
+  type PointInspection,
   type TerrainPoint,
 } from '../services/terrainAnalysis.js'
 import { isInElkRange } from '../services/elkRange.js'
+import { fetchFireHistory, summarizeFireHistory } from '../services/fireHistory.js'
+import { checkAndIncrementUsage } from '../services/usage.js'
+import type { AuthedRequest } from '../middleware/auth.js'
 
 function getClient(): OpenAI {
   const apiKey = process.env.OPENAI_API_KEY
@@ -86,13 +92,16 @@ function mToFt(m: number): string {
  */
 function terrainMatchesType(type: string | undefined, slope: number): boolean {
   switch ((type ?? '').toLowerCase()) {
-    case 'meadow':   return slope <= 15            // flat to gentle open ground
-    case 'wallow':   return slope <= 12            // flat boggy spots
-    case 'bench':    return slope >= 4 && slope <= 28 // a step on a slope
-    case 'drainage': return slope >= 4             // drainages run downhill
-    case 'saddle':   return slope <= 25            // low point between highs
-    case 'spring':   return slope <= 25            // spring sources
-    default:         return true                    // unknown types — don't block
+    case 'meadow':       return slope <= 15            // flat to gentle open ground
+    case 'wallow':       return slope <= 12            // flat boggy spots
+    case 'bench':        return slope >= 4 && slope <= 12 // a real shelf, not a sidehill
+    case 'drainage':     return slope >= 4             // drainages run downhill
+    case 'saddle':       return slope <= 12            // low point between highs (matches detector slope cap)
+    case 'spring':       return slope <= 25            // spring sources
+    case 'ridge':        return slope <= 25            // along the spine of a ridgeline
+    case 'finger-ridge': return slope >= 4 && slope <= 28 // sub-ridge tongue off a main ridge
+    case 'transition-zone': return slope >= 4 && slope <= 22 // meadow/timber staging band
+    default:             return true                    // unknown types — don't block
   }
 }
 
@@ -102,6 +111,60 @@ function terrainMatchesType(type: string | undefined, slope: number): boolean {
  */
 function looksLikeHiddenRoad(slope: number, elevation: number, minElevation: number): boolean {
   return slope < 3 && (elevation - minElevation) < 50
+}
+
+/**
+ * Fresh point-centered feature inspection for a single POI. Used to verify
+ * topographic POIs at their exact coordinate — the bbox-wide grid quantizes
+ * to ~168m cells, which can make ordinary sidehills look like benches,
+ * saddles, or finger ridges.
+ *
+ * 200m cell spacing matches the dev inspector's default so verification
+ * agrees with what the user sees when manually inspecting a coord. Slope
+ * is computed via finite difference over 400m baseline at this spacing —
+ * narrow terrain breaks <200m wide get characterized by their surrounding
+ * slope context rather than by one coarse selection-grid cell.
+ */
+async function inspectPoiTerrainPrecisely(
+  lat: number,
+  lng: number,
+): Promise<PointInspection | null> {
+  const cellSpacingM = 200
+  const gridSize = 31
+  const halfExtent = (gridSize - 1) / 2
+  const latStep = cellSpacingM / 111_000
+  const lngStep = cellSpacingM / (111_000 * Math.cos((lat * Math.PI) / 180))
+  const bounds = {
+    south: lat - halfExtent * latStep,
+    north: lat + halfExtent * latStep,
+    west: lng - halfExtent * lngStep,
+    east: lng + halfExtent * lngStep,
+  }
+  try {
+    const grid = await fetchElevationGrid(bounds, gridSize)
+    const points = computeSlopeAspect(grid)
+    return inspectTerrainAt(points, grid, halfExtent, halfExtent)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Pick an elevation-grid size targeting ~175m cell spacing across the bbox.
+ * Sub-200m sampling is required for the saddle detector to reliably catch
+ * peaks that fall between cells (bilinear interpolation over 400m smooths
+ * sharp peaks below the detection threshold). Capped 20..60 to keep the
+ * elevation fetch and downstream feature scan bounded.
+ */
+function computeGridSize(bounds: {
+  north: number; south: number; east: number; west: number
+}): number {
+  const TARGET_CELL_M = 175
+  const centerLat = (bounds.north + bounds.south) / 2
+  const widthM = (bounds.east - bounds.west) * 111_000 * Math.cos((centerLat * Math.PI) / 180)
+  const heightM = (bounds.north - bounds.south) * 111_000
+  const maxSpan = Math.max(widthM, heightM)
+  return Math.max(20, Math.min(60, Math.round(maxSpan / TARGET_CELL_M)))
 }
 
 /**
@@ -139,6 +202,39 @@ function findGridOutliers(
   return outliers
 }
 
+type DetectedTerrainFeature = TerrainAnalysis['detectedFeatures'][number]
+type AnchorablePoiType = Extract<DetectedTerrainFeature['type'], 'bench' | 'ridge' | 'finger-ridge' | 'saddle' | 'transition-zone'>
+
+function normalizeAnchorablePoiType(type: string | undefined): AnchorablePoiType | null {
+  switch ((type ?? '').toLowerCase()) {
+    case 'bench': return 'bench'
+    case 'ridge': return 'ridge'
+    case 'finger-ridge': return 'finger-ridge'
+    case 'saddle': return 'saddle'
+    case 'transition-zone': return 'transition-zone'
+    default: return null
+  }
+}
+
+function nearestDetectedFeature(
+  lat: number,
+  lng: number,
+  features: DetectedTerrainFeature[],
+  maxMeters: number,
+): { feature: DetectedTerrainFeature; distanceMeters: number } | null {
+  let nearest: { feature: DetectedTerrainFeature; distanceMeters: number } | null = null
+
+  for (const feature of features) {
+    const distanceMeters = haversineMeters(lat, lng, feature.lat, feature.lng)
+    if (distanceMeters > maxMeters) continue
+    if (!nearest || distanceMeters < nearest.distanceMeters) {
+      nearest = { feature, distanceMeters }
+    }
+  }
+
+  return nearest
+}
+
 /**
  * Replace elevation / slope numbers in an AI-written description with the
  * real values from the terrain grid. Keeps the AI's prose voice but cleans
@@ -171,7 +267,7 @@ const seasonBehaviorRules: Record<string, string> = {
 FEEDING (weight: dawn 35%, dusk 40%):
 - Elk feed in meadows and parks during predawn/dusk. Cows maintain feeding patterns but are herded by bulls.
 - Place feeding POIs on mapped meadows/grasslands WITHIN 100-200m of timber edge (elk never venture farther during daylight).
-- The transition zone (100-400m band where timber thins to meadow) is the highest-probability encounter zone.
+- The transition zone (100-400m band where timber thins to meadow or burn/regrowth) is the highest-probability encounter zone.
 
 WATER (weight: dawn 50%, dusk 55%):
 - HIGH importance during rut. Elk stay within 400m of water. Cows need daily water, bulls won't let them wander far.
@@ -206,6 +302,7 @@ SECURITY (weight: dawn 40%, midday 60%, dusk 35%):
 FEEDING (weight: dawn 65%, dusk 75%):
 - Feeding becomes primary driver. Bulls are depleted (lost 15-20% body weight) and need calories.
 - Bulls often DON'T LEAVE TIMBER — they feed in small openings and shaded parks within canopy. Do NOT place bull feeding POIs in open meadows.
+- Historical burns, clearcuts, and scrubby regrowth can be excellent post-rut feed if grass/forbs are back, but daylight setups should stay near the adjacent timber line.
 - Cow herds return to predictable feed-to-bed patterns on south/southeast-facing slopes.
 - Place feeding POIs at timber edges and small clearings WITHIN forest, not in large open meadows.
 
@@ -240,6 +337,7 @@ SECURITY (weight: dawn 70%, midday 90%, dusk 65%):
 FEEDING (weight: dawn 90%, dusk 90%):
 - Survival mode. Elk need calories desperately. Large herds (50-200+ animals) on limited winter range.
 - Elk feed in open SOUTH-FACING meadows and slopes. Most visible and predictable elk of the year.
+- South-facing burns/regrowth with grass returning can be premium late-season feed; prioritize the timber edge above or beside the opening over the center of the burn.
 - Same feeding areas on the same schedule daily until disrupted.
 - Place feeding POIs on south-facing mapped meadows. The south-facing transition zone (timber edge above meadow) is THE most important late-season terrain feature.
 
@@ -311,6 +409,7 @@ function buildPrompt(
   terrain: { elevationProfile: string; slopeAnalysis: string; aspectBreakdown: string; elkHabitatNotes: string },
   featuresList: string,
   terrainSummary: string,
+  fireHistorySummary: string,
   roadAvoidanceSection: string,
   terrainFeaturesSection: string,
   bufferMiles: number,
@@ -341,6 +440,9 @@ ${terrain.elkHabitatNotes}
 
 LAND COVER (OpenStreetMap):
 ${terrainSummary}
+
+FIRE HISTORY:
+${fireHistorySummary}
 ${roadAvoidanceSection}
 ${terrainFeaturesSection}
 ${featuresList}
@@ -348,21 +450,21 @@ UNIVERSAL PRINCIPLES:
 - Thermals: Morning thermals flow UPHILL, evening thermals flow DOWNHILL. Elk bed where thermals create predictable scent detection (points, ridge noses, bench edges).
 - Escape routes: Elk always bed with 2+ escape routes (downhill into drainage + lateral along bench/contour). Single-exit bedding = unused.
 - Pressure response: Pressured elk shift to thicker, steeper, more remote terrain. Best areas are >1 mile from roads with no ATV access.
-- Transition zone: The 100-400m band where timber thins to meadow is the #1 encounter zone across all seasons. Hunt it at first/last 90 min of daylight.
+- Transition zone: The 100-400m band where timber thins to meadow, grass, or burn/regrowth is the #1 encounter zone across all seasons. Hunt it at first/last 90 min of daylight.
 
 PLACEMENT RULES:
 1. ALL POIs must be >${bufferMiles.toFixed(2)} miles (${Math.round(bufferMeters)}m) from ANY road, trail, or building listed above.
 2. ALL POIs must be >5 miles from any town, village, hamlet, or settlement.
 3. Use REAL coordinates from detected terrain features and OSM data — do not invent locations.
 4. NEVER place near buildings or developed areas.
-5. Match POI type to real terrain: "meadow" ONLY on mapped meadows, "drainage" ONLY at real drainage points, "saddle" ONLY at detected saddles, "spring" ONLY near confirmed water.
+5. Match POI type to real terrain: "meadow" ONLY on mapped meadows, "transition-zone" ONLY on detected 100-400m meadow/regrowth-to-timber staging bands, "drainage" ONLY at real drainage points, "saddle" ONLY at detected saddles, "spring" ONLY near confirmed water, "bench" ONLY for true sidehill shelves (gentle slope with terrain rising above AND dropping below — NOT drainage floors or finger-ridge spines), "finger-ridge" for sub-ridges spurring off a main ridgeline into a drainage, "ridge" for the spine of a main ridgeline.
 6. Descriptions MUST reference actual elevation, slope angle, aspect, and specific tactical advice for the current season + time of day.
 7. For "${timeOfDay}" specifically: focus POIs on the behaviors with the highest weights for this time window.
 8. NEVER place POIs in a straight line, evenly-spaced row, or regular grid pattern. Real elk terrain is irregular — POIs should follow the natural shape of drainages, ridgelines, and meadow edges, never share the same latitude or longitude, and never be uniformly spaced. If two POIs would land within ~150m of each other, drop one. If you cannot find enough genuinely distinct terrain features, return FEWER POIs rather than fabricating positions to fill the area.
 
 Generate up to 20 points of interest. Only generate POIs where the terrain genuinely supports the behavior — if the area lacks suitable terrain for a behavior, generate fewer or zero POIs for it. Quality over quantity. Coordinates STRICTLY WITHIN bounds. Empty arrays are acceptable when terrain doesn't support a behavior — DO NOT pad with grid-pattern POIs.
 
-POI types: meadow, drainage, wallow, saddle, spring, bench
+POI types: meadow, transition-zone, drainage, wallow, saddle, spring, bench, ridge, finger-ridge
 Behaviors: feeding, water, bedding, wallows, travel, security
 
 Respond with ONLY valid JSON:
@@ -372,7 +474,7 @@ Respond with ONLY valid JSON:
       "name": "string - descriptive name referencing the actual terrain feature",
       "lat": number,
       "lng": number,
-      "type": "meadow|drainage|wallow|saddle|spring|bench",
+      "type": "meadow|transition-zone|drainage|wallow|saddle|spring|bench|ridge|finger-ridge",
       "relatedBehaviors": ["feeding", "water", etc - only behaviors relevant to this season],
       "description": "string - 2-3 sentences: what the terrain is, why elk use it this season/time, and specific tactical hunting advice (where to set up, wind direction, approach)",
       "reasoningWhyHere": "string - 1-2 sentences explaining why this exact coordinate/feature was chosen over nearby terrain",
@@ -382,7 +484,13 @@ Respond with ONLY valid JSON:
 }`
 }
 
-export async function generatePOIs(req: Request, res: Response) {
+export async function generatePOIs(req: AuthedRequest, res: Response) {
+  const uid = req.uid
+  if (!uid) {
+    res.status(401).json({ error: 'Unauthenticated' })
+    return
+  }
+
   const { bounds, bufferMiles: rawBuffer } = req.body as GeneratePOIRequest
 
   // Clamp buffer to 0.1–2.0 miles
@@ -418,32 +526,86 @@ export async function generatePOIs(req: Request, res: Response) {
     return
   }
 
+  // ── Plan check + atomic usage increment ──
+  // Done BEFORE the AI call so two concurrent requests can't both slip past
+  // the limit. A failed AI call still consumes a slot (acceptable for v1 —
+  // prevents users from gaming the limit by triggering errors).
+  let usage
+  try {
+    usage = await checkAndIncrementUsage(uid)
+  } catch (err: unknown) {
+    if ((err as { code?: string })?.code === 'LIMIT_EXCEEDED') {
+      const msg = err instanceof Error ? err.message : 'Monthly limit reached'
+      console.warn(`[usage] limit reached for ${uid}: ${msg}`)
+      res.status(402).json({
+        error: msg,
+        code: 'LIMIT_EXCEEDED',
+      })
+      return
+    }
+    console.error('[usage] check failed:', err)
+    res.status(500).json({ error: 'Failed to check usage limits' })
+    return
+  }
+
   const centerLat = (bounds.north + bounds.south) / 2
   const centerLng = (bounds.east + bounds.west) / 2
 
   try {
     // ── Step 1: Fetch real data in parallel (shared across all 9 combos) ──
-    console.log('Fetching OSM land data + elevation grid...')
-    const [landData, elevGrid] = await Promise.all([
+    console.log('Fetching OSM land data + elevation grid + MTBS fire history...')
+    const [landData, elevGrid, fireHistory] = await Promise.all([
       fetchLandData(bounds),
-      fetchElevationGrid(bounds, 20), // 20×20 = 400 points, 4 API calls
+      // Adaptive grid: target ~175m cell spacing regardless of bbox size.
+      // 200m was the resolution at which the dev inspector reliably caught
+      // sharp peaks (confirmed against a real saddle at 46.53732,-111.38111).
+      // 175m gives a small margin to dodge bilinear smoothing without
+      // bloating the prompt with features from <100m noise.
+      // 2mi bbox → ~20×20, 3mi → ~28, 5mi → ~46, capped 20..60.
+      fetchElevationGrid(bounds, computeGridSize(bounds)),
+      fetchFireHistory(bounds),
     ])
 
     const terrainSummary = summarizeLandData(landData)
+    const fireHistorySummary = summarizeFireHistory(fireHistory)
     const roadTrailSegments = getRoadTrailSegments(landData)
 
     const totalRoadPts = landData.roads.reduce((n, r) => n + r.geometry.length, 0)
     const totalTrailPts = landData.trails.reduce((n, r) => n + r.geometry.length, 0)
-    const townPoints = landData.towns.flatMap(t => t.geometry)
-    console.log(`OSM: ${landData.roads.length} roads (${totalRoadPts} pts), ${landData.trails.length} trails (${totalTrailPts} pts), ${landData.forests.length} forests, ${landData.meadows.length} meadows, ${landData.water.length} water, ${landData.streams.length} streams, ${landData.towns.length} towns`)
+    // Tag each town point with its OSM place kind + name so the buffer check
+    // downstream can apply size-appropriate distances and explain rejections.
+    // Hamlets are dropped entirely — OSM tags them on tiny roadside clusters
+    // (sometimes just 3 buildings) and they routinely poison entire bboxes
+    // with a 5-mile blanket reject. Real settlements (city/town/village) stay.
+    const townPoints = landData.towns.flatMap((t) =>
+      (t.placeKind === 'hamlet' ? [] : t.geometry).map((g) => ({
+        ...g,
+        kind: t.placeKind ?? 'town',
+        name: t.name,
+      })),
+    )
+    console.log(`OSM: ${landData.roads.length} roads (${totalRoadPts} pts), ${landData.trails.length} trails (${totalTrailPts} pts), ${landData.forests.length} forests, ${landData.meadows.length} meadows, ${landData.regrowth.length} regrowth, ${landData.water.length} water, ${landData.streams.length} streams, ${landData.towns.length} towns`)
+    console.log(`MTBS: ${fireHistory.length} burn perimeter${fireHistory.length === 1 ? '' : 's'}`)
     console.log(`Road/trail segments for buffer check: ${roadTrailSegments.length}`)
     console.log(`Elevation: ${elevGrid.minElevation.toFixed(0)}m – ${elevGrid.maxElevation.toFixed(0)}m (${elevGrid.points.length} points)`)
 
     // ── Step 2: Analyze terrain from real elevation data ──
-    const terrain = analyzeTerrainForPrompt(elevGrid, landData)
+    const terrain = analyzeTerrainForPrompt(elevGrid, landData, fireHistory)
     const featuresList = formatFeaturesForPrompt(terrain.detectedFeatures)
 
-    console.log(`Terrain: ${terrain.detectedFeatures.length} features detected`)
+    {
+      const byType = terrain.detectedFeatures.reduce<Record<string, number>>((acc, f) => {
+        acc[f.type] = (acc[f.type] || 0) + 1
+        return acc
+      }, {})
+      const breakdown = Object.entries(byType)
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, n]) => `${n} ${k}`)
+        .join(', ')
+      console.log(
+        `Terrain: ${terrain.detectedFeatures.length} features detected${breakdown ? ` (${breakdown})` : ''}`,
+      )
+    }
 
     // ── Step 3: Build road avoidance section ──
     let roadAvoidanceSection = ''
@@ -469,7 +631,7 @@ ${roadSamples.join('\n')}
 
     // ── Step 4: Build terrain features for prompt ──
     let terrainFeaturesSection = ''
-    if (landData.meadows.length > 0 || landData.water.length > 0 || landData.streams.length > 0 || landData.forests.length > 0) {
+    if (landData.meadows.length > 0 || landData.regrowth.length > 0 || landData.water.length > 0 || landData.streams.length > 0 || landData.forests.length > 0) {
       const features: string[] = []
       for (const meadow of landData.meadows.slice(0, 8)) {
         const center = meadow.geometry[Math.floor(meadow.geometry.length / 2)]
@@ -481,6 +643,12 @@ ${roadSamples.join('\n')}
         const center = water.geometry[Math.floor(water.geometry.length / 2)]
         if (center) {
           features.push(`  - Water body${water.name ? ` "${water.name}"` : ''}: ~${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`)
+        }
+      }
+      for (const regrowth of landData.regrowth.slice(0, 8)) {
+        const center = regrowth.geometry[Math.floor(regrowth.geometry.length / 2)]
+        if (center) {
+          features.push(`  - Regrowth/burn-clearcut proxy${regrowth.name ? ` "${regrowth.name}"` : ''}: ~${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`)
         }
       }
       for (const stream of landData.streams.slice(0, 8)) {
@@ -528,7 +696,7 @@ ${features.join('\n')}
         try {
           const prompt = buildPrompt(
             season, timeOfDay, pressure, bounds, centerLat, centerLng,
-            terrain, featuresList, terrainSummary,
+            terrain, featuresList, terrainSummary, fireHistorySummary,
             roadAvoidanceSection, terrainFeaturesSection,
             bufferMiles, bufferMeters,
           )
@@ -556,43 +724,148 @@ ${features.join('\n')}
           const rawPois = parsed.pois || []
 
           // Server-side buffer enforcement
-          const townBufferMeters = 5 * METERS_PER_MILE // 5 miles from any town
+          // Buffer radius scaled to settlement size. Cities/towns push elk
+          // hard with traffic, infrastructure, and consistent human presence;
+          // villages are mostly clusters of homes with a fraction of that
+          // pressure, so a 2-mile ring is more honest than the same 5.
+          // Hamlets never reach this code (filtered out above).
+          function townBufferFor(kind: 'city' | 'town' | 'village' | 'hamlet'): number {
+            switch (kind) {
+              case 'city':    return 5 * METERS_PER_MILE
+              case 'town':    return 5 * METERS_PER_MILE
+              case 'village': return 2 * METERS_PER_MILE
+              default:        return 0
+            }
+          }
           // Minimum effective road buffer regardless of user slider setting.
           // OSM coverage is incomplete (forest roads often missing), so we need
           // a safety margin even when the user picks a small value.
           const MIN_ROAD_BUFFER_METERS = 0.25 * METERS_PER_MILE // 400m
           const effectiveRoadBuffer = Math.max(bufferMeters, MIN_ROAD_BUFFER_METERS)
-          const filteredPois = rawPois.filter((poi: { lat: number; lng: number; name?: string }) => {
+          const bufRejects = { outOfBounds: 0, nearRoad: 0, nearBuilding: 0, nearTown: 0 }
+          type RejectDetail = { lat: number; lng: number; name?: string; type?: string; reason: string; note?: string }
+          const debug = process.env.DEBUG_POI_REJECTIONS === '1'
+          const bufRejectDetails: RejectDetail[] = []
+
+          const filteredPois = rawPois.filter((poi: { lat: number; lng: number; name?: string; type?: string }) => {
             // Bounds check — reject POIs the AI placed outside the analysis box
             if (
               poi.lat < bounds.south || poi.lat > bounds.north ||
               poi.lng < bounds.west  || poi.lng > bounds.east
             ) {
+              bufRejects.outOfBounds++
+              if (debug) bufRejectDetails.push({ lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type, reason: 'outOfBounds' })
               return false
             }
             // Road/trail buffer
             if (roadTrailSegments.length > 0) {
               if (isNearRoadOrTrail(poi.lat, poi.lng, roadTrailSegments, effectiveRoadBuffer)) {
+                bufRejects.nearRoad++
+                if (debug) bufRejectDetails.push({ lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type, reason: 'nearRoad', note: `< ${(effectiveRoadBuffer / METERS_PER_MILE).toFixed(2)}mi to road/trail` })
                 return false
               }
             }
             // Building buffer
             for (const bPt of buildingPoints) {
               if (haversineMeters(poi.lat, poi.lng, bPt.lat, bPt.lng) < bufferMeters) {
+                bufRejects.nearBuilding++
+                if (debug) bufRejectDetails.push({ lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type, reason: 'nearBuilding' })
                 return false
               }
             }
-            // Town buffer (5 miles)
+            // Town buffer — kind-aware (city/town: 5mi, village: 2mi, hamlet: skipped).
             for (const tPt of townPoints) {
-              if (haversineMeters(poi.lat, poi.lng, tPt.lat, tPt.lng) < townBufferMeters) {
+              const buffer = townBufferFor(tPt.kind)
+              if (buffer <= 0) continue
+              const dist = haversineMeters(poi.lat, poi.lng, tPt.lat, tPt.lng)
+              if (dist < buffer) {
+                bufRejects.nearTown++
+                if (debug) {
+                  const distMi = (dist / METERS_PER_MILE).toFixed(2)
+                  const bufMi = (buffer / METERS_PER_MILE).toFixed(2)
+                  const settlement = tPt.name ? `"${tPt.name}" (${tPt.kind})` : `unnamed ${tPt.kind}`
+                  bufRejectDetails.push({
+                    lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type,
+                    reason: 'nearTown',
+                    note: `${distMi}mi to ${settlement}, buffer ${bufMi}mi`,
+                  })
+                }
                 return false
               }
             }
             return true
           })
 
+          const detectedBenches = terrain.detectedFeatures.filter((f) => f.type === 'bench')
+          const detectedRidges = terrain.detectedFeatures.filter((f) => f.type === 'ridge')
+          const detectedFingerRidges = terrain.detectedFeatures.filter((f) => f.type === 'finger-ridge')
+          const detectedSaddles = terrain.detectedFeatures.filter((f) => f.type === 'saddle')
+          const detectedTransitionZones = terrain.detectedFeatures.filter((f) => f.type === 'transition-zone')
+          const BENCH_PROXIMITY_M = 250
+          const RIDGE_PROXIMITY_M = 300       // ridges are linear so allow slightly more slack
+          const FINGER_RIDGE_PROXIMITY_M = 300
+          const TRANSITION_ZONE_PROXIMITY_M = 300
+          // Saddles are POINT features — the col itself is a single low spot
+          // and that's where the elk-tactical value lives. A 300m proximity
+          // (fine for linear ridges and area benches) lets the AI place a
+          // "saddle" POI a couple hundred meters off the actual crossing,
+          // landing on the steep hillside next to it. 150m forces the POI
+          // to be on or immediately adjacent to the detected saddle cell.
+          const SADDLE_PROXIMITY_M = 150
+          const detectedByType: Record<AnchorablePoiType, DetectedTerrainFeature[]> = {
+            bench: detectedBenches,
+            ridge: detectedRidges,
+            'finger-ridge': detectedFingerRidges,
+            saddle: detectedSaddles,
+            'transition-zone': detectedTransitionZones,
+          }
+          const anchorProximityM: Record<AnchorablePoiType, number> = {
+            bench: BENCH_PROXIMITY_M,
+            ridge: RIDGE_PROXIMITY_M,
+            'finger-ridge': FINGER_RIDGE_PROXIMITY_M,
+            saddle: SADDLE_PROXIMITY_M,
+            'transition-zone': TRANSITION_ZONE_PROXIMITY_M,
+          }
+
+          // Return the detected feature coordinate that passed validation,
+          // not GPT's nearby approximate coordinate. This keeps marker
+          // placement, panel coordinates, and inspect-point diagnostics aligned.
+          const anchoredPois = filteredPois.map((poi: {
+            lat: number
+            lng: number
+            name?: string
+            type?: string
+            relatedBehaviors?: string[]
+            description?: string
+          }) => {
+            const anchorType = normalizeAnchorablePoiType(poi.type)
+            if (!anchorType) return poi
+
+            const nearest = nearestDetectedFeature(
+              poi.lat,
+              poi.lng,
+              detectedByType[anchorType],
+              anchorProximityM[anchorType],
+            )
+            if (!nearest) return poi
+
+            if (debug && nearest.distanceMeters > 25) {
+              console.log(
+                `  [anchor] ${anchorType} ${poi.lat.toFixed(5)},${poi.lng.toFixed(5)} ` +
+                `→ ${nearest.feature.lat.toFixed(5)},${nearest.feature.lng.toFixed(5)} ` +
+                `(${nearest.distanceMeters.toFixed(0)}m)`,
+              )
+            }
+            return {
+              ...poi,
+              type: anchorType,
+              lat: nearest.feature.lat,
+              lng: nearest.feature.lng,
+            }
+          })
+
           // ── Terrain verification: attach real elevation/slope/aspect ──
-          const verifiedPois = filteredPois.map((poi: {
+          const verifiedPois = anchoredPois.map((poi: {
             lat: number
             lng: number
             name?: string
@@ -610,10 +883,118 @@ ${features.join('\n')}
             }
           })
 
+          // ── Precision pass for topographic POIs ──
+          // The bbox-wide grid can quantize ordinary sidehills into benches,
+          // saddles, or finger ridges. Run the same point-centered inspector
+          // used by the dev panel and keep the POI only if that precise check
+          // agrees with the label.
+          const precisePois = await Promise.all(
+            verifiedPois.map(async (poi: (typeof verifiedPois)[number]) => {
+              const anchorType = normalizeAnchorablePoiType(poi.type)
+              if (!anchorType) return poi
+              const inspection = await inspectPoiTerrainPrecisely(poi.lat, poi.lng)
+              if (!inspection) return poi
+              if (debug && Math.abs(inspection.point.slope - poi.slope) > 5) {
+                console.log(
+                  `  [precise] ${anchorType} ${poi.lat.toFixed(5)},${poi.lng.toFixed(5)} ` +
+                  `grid=${poi.slope}° → precise=${inspection.point.slope}°`,
+                )
+              }
+              return {
+                ...poi,
+                elevation: inspection.point.elevation,
+                elevationFt: mToFt(inspection.point.elevation),
+                slope: inspection.point.slope,
+                aspect: inspection.point.aspect,
+                preciseFeatures: inspection.features,
+              }
+            }),
+          )
+
+          // AI-labeled benches must sit near a real detected bench feature
+          // — the slope-only validator can't tell a true sidehill bench from
+          // a drainage floor at the same slope range, but the detector can
+          // (it requires actual mid-slope position via above/below relief).
+          // Same belt-and-suspenders treatment for ridge / finger-ridge:
+          // GPT will otherwise scatter "ridge" labels across drainage spurs
+          // that happen to fall in the right slope band.
+          const terrRejects = {
+            slopeMismatch: 0,
+            hiddenRoad: 0,
+            benchUnsupported: 0,
+            ridgeUnsupported: 0,
+            fingerRidgeUnsupported: 0,
+            saddleUnsupported: 0,
+            transitionZoneUnsupported: 0,
+          }
+          const terrRejectDetails: RejectDetail[] = []
+
           // ── Type-vs-terrain + hidden-road sanity checks ──
-          const terrainSanePois = verifiedPois.filter((poi) => {
-            if (!terrainMatchesType(poi.type, poi.slope)) return false
-            if (looksLikeHiddenRoad(poi.slope, poi.elevation, elevGrid.minElevation)) return false
+          const terrainSanePois = precisePois.filter((poi) => {
+            if (!terrainMatchesType(poi.type, poi.slope)) {
+              terrRejects.slopeMismatch++
+              if (debug) terrRejectDetails.push({ lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type, reason: 'slopeMismatch', note: `${poi.slope}° doesn't fit type ${poi.type}` })
+              return false
+            }
+            if (looksLikeHiddenRoad(poi.slope, poi.elevation, elevGrid.minElevation)) {
+              terrRejects.hiddenRoad++
+              if (debug) terrRejectDetails.push({ lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type, reason: 'hiddenRoad', note: `slope=${poi.slope}°, elev=${poi.elevationFt}ft (near min)` })
+              return false
+            }
+            if (
+              poi.type === 'bench' &&
+              (!poi.preciseFeatures?.bench.detected ||
+                !detectedBenches.some(
+                  (b) => haversineMeters(poi.lat, poi.lng, b.lat, b.lng) < BENCH_PROXIMITY_M,
+                ))
+            ) {
+              terrRejects.benchUnsupported++
+              if (debug) terrRejectDetails.push({ lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type, reason: 'benchUnsupported', note: poi.preciseFeatures?.bench.reason ?? `no detected bench within ${BENCH_PROXIMITY_M}m` })
+              return false
+            }
+            if (
+              poi.type === 'ridge' &&
+              (!poi.preciseFeatures?.ridge.detected ||
+                !detectedRidges.some(
+                  (r) => haversineMeters(poi.lat, poi.lng, r.lat, r.lng) < RIDGE_PROXIMITY_M,
+                ))
+            ) {
+              terrRejects.ridgeUnsupported++
+              if (debug) terrRejectDetails.push({ lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type, reason: 'ridgeUnsupported', note: poi.preciseFeatures?.ridge.reason ?? `no detected ridge within ${RIDGE_PROXIMITY_M}m` })
+              return false
+            }
+            if (
+              poi.type === 'finger-ridge' &&
+              (!poi.preciseFeatures?.fingerRidge.detected ||
+                !detectedFingerRidges.some(
+                  (r) => haversineMeters(poi.lat, poi.lng, r.lat, r.lng) < FINGER_RIDGE_PROXIMITY_M,
+                ))
+            ) {
+              terrRejects.fingerRidgeUnsupported++
+              if (debug) terrRejectDetails.push({ lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type, reason: 'fingerRidgeUnsupported', note: poi.preciseFeatures?.fingerRidge.reason ?? `no detected finger-ridge within ${FINGER_RIDGE_PROXIMITY_M}m` })
+              return false
+            }
+            if (
+              poi.type === 'saddle' &&
+              (!poi.preciseFeatures?.saddle.detected ||
+                !detectedSaddles.some(
+                  (s) => haversineMeters(poi.lat, poi.lng, s.lat, s.lng) < SADDLE_PROXIMITY_M,
+                ))
+            ) {
+              terrRejects.saddleUnsupported++
+              if (debug) terrRejectDetails.push({ lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type, reason: 'saddleUnsupported', note: poi.preciseFeatures?.saddle.reason ?? `no detected saddle within ${SADDLE_PROXIMITY_M}m` })
+              return false
+            }
+            if (
+              poi.type === 'transition-zone' &&
+              !detectedTransitionZones.some(
+                (z) => haversineMeters(poi.lat, poi.lng, z.lat, z.lng) < TRANSITION_ZONE_PROXIMITY_M,
+              )
+            ) {
+              terrRejects.transitionZoneUnsupported++
+              if (debug) terrRejectDetails.push({ lat: poi.lat, lng: poi.lng, name: poi.name, type: poi.type, reason: 'transitionZoneUnsupported', note: `no detected transition-zone within ${TRANSITION_ZONE_PROXIMITY_M}m` })
+              return false
+            }
             return true
           })
 
@@ -622,22 +1003,46 @@ ${features.join('\n')}
           const nonGridPois = terrainSanePois.filter((_, i) => !gridOutliers.has(i))
 
           // ── Fix up AI-written descriptions so their numbers match reality ──
-          const correctedPois = nonGridPois.map((poi) => ({
-            ...poi,
-            description: correctDescriptionText(poi.description, {
-              elevationFt: poi.elevationFt,
-              slope: poi.slope,
-            }),
-            reasoningWhyHere: typeof poi.reasoningWhyHere === 'string' ? poi.reasoningWhyHere.trim() : '',
-            reasoningWhyNotElsewhere: typeof poi.reasoningWhyNotElsewhere === 'string' ? poi.reasoningWhyNotElsewhere.trim() : '',
-          }))
+          const correctedPois = nonGridPois.map((poi) => {
+            const { preciseFeatures: _preciseFeatures, ...publicPoi } = poi
+            return {
+              ...publicPoi,
+              description: correctDescriptionText(poi.description, {
+                elevationFt: poi.elevationFt,
+                slope: poi.slope,
+              }),
+              reasoningWhyHere: typeof poi.reasoningWhyHere === 'string' ? poi.reasoningWhyHere.trim() : '',
+              reasoningWhyNotElsewhere: typeof poi.reasoningWhyNotElsewhere === 'string' ? poi.reasoningWhyNotElsewhere.trim() : '',
+            }
+          })
 
-          const rejTerrain = verifiedPois.length - terrainSanePois.length
           const rejGrid = terrainSanePois.length - nonGridPois.length
+
+          const bufBreakdown = Object.entries(bufRejects)
+            .filter(([, n]) => n > 0)
+            .map(([k, n]) => `${k}=${n}`)
+            .join(',')
+          const terrBreakdown = Object.entries(terrRejects)
+            .filter(([, n]) => n > 0)
+            .map(([k, n]) => `${k}=${n}`)
+            .join(',')
+
           console.log(
             `  ${key}: ${rawPois.length} gen → ${filteredPois.length} buf → ${terrainSanePois.length} terr → ${nonGridPois.length} final` +
-            (rejTerrain > 0 || rejGrid > 0 ? ` (-${rejTerrain} terrain, -${rejGrid} grid)` : '')
+            (bufBreakdown ? `  [buf: ${bufBreakdown}]` : '') +
+            (terrBreakdown ? `  [terr: ${terrBreakdown}]` : '') +
+            (rejGrid > 0 ? `  [grid: -${rejGrid}]` : '')
           )
+
+          if (debug && (bufRejectDetails.length > 0 || terrRejectDetails.length > 0)) {
+            for (const r of bufRejectDetails) {
+              console.log(`    × ${key} buf:${r.reason}  ${r.lat.toFixed(5)},${r.lng.toFixed(5)}  ${r.type ?? ''}  "${r.name ?? ''}"${r.note ? '  — ' + r.note : ''}`)
+            }
+            for (const r of terrRejectDetails) {
+              console.log(`    × ${key} terr:${r.reason}  ${r.lat.toFixed(5)},${r.lng.toFixed(5)}  ${r.type ?? ''}  "${r.name ?? ''}"${r.note ? '  — ' + r.note : ''}`)
+            }
+          }
+
           return { key, pois: correctedPois }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err)
@@ -656,7 +1061,7 @@ ${features.join('\n')}
     const totalPois = Object.values(comboResults).reduce((sum, arr) => sum + arr.length, 0)
     console.log(`All 9 combos complete — ${totalPois} total POIs across all combinations`)
 
-    res.json({ combos: comboResults, season })
+    res.json({ combos: comboResults, season, usage })
   } catch (err: unknown) {
     console.error('POI generation error:', err)
     const message = err instanceof Error ? err.message : 'Unknown error'

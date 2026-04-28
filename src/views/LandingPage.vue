@@ -22,33 +22,54 @@ function signIn() {
 const features = [
   {
     icon: 'terrain',
-    title: 'Real Elevation Data',
-    desc: '400-point USGS elevation grid for every analysis. Real slope angles, aspect directions, and terrain feature detection — saddles, benches, ridgelines, drainages, finger ridges. Measured, not guessed.',
+    title: 'Measured Terrain, Not Heatmap Guessing',
+    desc: 'Adaptive USGS elevation analysis computes real slope, aspect, and relief across your selected area, then detects saddles, benches, ridgelines, drainages, and finger ridges at real coordinates.',
   },
   {
     icon: 'auto_awesome',
-    title: 'AI-Powered POIs',
-    desc: 'Points of interest placed on actual meadows, drainages, and saddles using verified satellite land cover. Every POI references real elevation, slope, and aspect with tactical hunting advice.',
+    title: 'AI POIs Anchored To Real Features',
+    desc: 'Generated POIs are checked against measured terrain and land cover before they hit your map. Bench, saddle, ridge, and transition-zone labels have to match the ground under the pin.',
   },
   {
-    icon: 'calendar_month',
-    title: 'Season + Time Intelligence',
-    desc: 'Rut, Post-Rut, Late Season. Dawn, Midday, Dusk. Each combination recalculates every POI and overlay because elk on October 1st at dawn are not the same elk on November 15th at dusk.',
+    icon: 'local_fire_department',
+    title: 'MTBS Burn History',
+    desc: 'Historical burn perimeters are pulled into the scouting model. Prime-age burns and regrowth near timber lines can surface as high-value feed-to-cover transition zones.',
   },
   {
-    icon: 'layers',
-    title: '5 Behavior Layers',
-    desc: 'Feeding, Water, Bedding, Wallows, Travel Corridors. Each scored by season and time, with color-coded zone overlays on the map. See the why, not just the where.',
+    icon: 'upload_file',
+    title: 'Import Your Waypoints',
+    desc: 'Bring in onX-style GPX waypoints, run terrain inspection on each one, and grade them through the same POI logic. Turn old sign, glassing, water, and bedding pins into structured scouting intel.',
+  },
+  {
+    icon: 'forest',
+    title: 'Transition-Zone Detection',
+    desc: 'RidgeRead looks for the 100-400m band where meadow, grass, burn, or regrowth openings meet security cover. That staging band is often more huntable than the middle of the opening.',
   },
   {
     icon: 'block',
-    title: 'Custom Road Buffer',
-    desc: 'Every road and trail is mapped from OpenStreetMap. Set your own buffer distance — POIs too close are automatically filtered out. If it\'s near a road, it\'s not elk habitat.',
+    title: 'Pressure-Aware Filtering',
+    desc: 'Roads, trails, buildings, and settlements are mapped before POIs are accepted. You control the road buffer, and the server filters out spots that are too exposed to pressure.',
+  },
+]
+
+const intelCards = [
+  {
+    label: 'FIELD HISTORY',
+    icon: 'pin_drop',
+    title: 'Grade the pins you already trust',
+    body: 'Import GPX waypoints from past hunts and RidgeRead inspects each coordinate for slope, aspect, elevation, and terrain feature matches. A waypoint becomes more than a dot: it becomes a bedding shelf, subtle saddle, drainage bottom, or low-confidence sidehill with an honest explanation.',
   },
   {
-    icon: 'public',
-    title: 'Works Anywhere',
-    desc: 'Flat Tops. Frank Church. Gila. Your spot. Not locked to pre-built unit maps — analyze any 5-mile area in elk country on the fly.',
+    label: 'FIRE + REGROWTH',
+    icon: 'local_fire_department',
+    title: 'Find burn edges elk can actually use',
+    body: 'MTBS burn history is blended with OSM meadow and regrowth signals to identify likely feed-to-cover bands. The model favors burns old enough to have grass, forbs, and brush returning, while keeping daylight setups close to adjacent timber.',
+  },
+  {
+    label: 'GROUND TRUTH',
+    icon: 'gps_fixed',
+    title: 'Inspect the exact coordinate',
+    body: 'The point inspector uses a centered elevation grid to explain why a location is or is not a bench, saddle, ridge, drainage, or finger ridge. It keeps the map, POI panel, and manual terrain check speaking the same language.',
   },
 ]
 
@@ -86,10 +107,11 @@ const seasonCards = [
 ]
 
 const steps = [
-  { num: '1', title: 'Select Your Area', desc: 'Click the map to place a 5-mile analysis box on the terrain you\'re scouting.' },
+  { num: '1', title: 'Select Your Area', desc: 'Draw a box over the drainage, ridge system, or burn edge you\'re scouting.' },
   { num: '2', title: 'Choose Season & Time', desc: 'Rut, Post-Rut, or Late Season. Dawn, Midday, or Dusk.' },
-  { num: '3', title: 'Hit Analyze', desc: 'Real elevation data is pulled, land cover is mapped, terrain features are detected, and AI places tactical POIs — all in seconds.' },
-  { num: '4', title: 'Hunt Smarter', desc: 'Tap any POI for advice specific to that exact spot, season, and time of day. Toggle behavior layers to understand why elk use that terrain.' },
+  { num: '3', title: 'Add Your Intel', desc: 'Import GPX waypoints or start clean. RidgeRead can inspect your existing pins alongside new AI-generated POIs.' },
+  { num: '4', title: 'Run Analysis', desc: 'Elevation, land cover, roads, towns, MTBS burn history, and transition zones are processed together.' },
+  { num: '5', title: 'Hunt Smarter', desc: 'Open any POI or imported waypoint for grade, terrain proof, coordinates, and advice tied to that exact spot.' },
 ]
 
 interface PricingTier {
@@ -113,6 +135,8 @@ const pricingTiers: PricingTier[] = [
     desc: 'For the hunter who scouts year-round.',
     features: [
       { text: '20 analyses per month', included: true },
+      { text: 'GPX waypoint import + terrain inspection', included: true },
+      { text: 'MTBS burn history context', included: true },
       { text: 'All 5 behavior layers', included: true },
       { text: 'All 4 base maps', included: true },
       { text: 'Season & time controls', included: true },
@@ -129,6 +153,8 @@ const pricingTiers: PricingTier[] = [
     desc: 'For outfitters, professional guides, and serious hunters.',
     features: [
       { text: 'Unlimited analyses', included: true },
+      { text: 'GPX waypoint import + terrain inspection', included: true },
+      { text: 'MTBS burn history context', included: true },
       { text: 'All 5 behavior layers', included: true },
       { text: 'All 4 base maps', included: true },
       { text: 'Season & time controls', included: true },
@@ -154,8 +180,8 @@ const pricingTiers: PricingTier[] = [
           <span class="text-amber">Like a 20-Year Guide.</span>
         </h1>
         <p class="hero-sub">
-          Real USGS elevation data. Satellite land cover. AI-powered terrain analysis.
-          See exactly where elk are feeding, bedding, and traveling — for your season, your time of day, your drainage.
+          Real USGS terrain analysis, land cover, road pressure, MTBS burn history,
+          and your own imported waypoints — all translated into elk-specific scouting intel for the season and time you hunt.
         </p>
         <div class="hero-actions">
           <q-btn
@@ -195,7 +221,7 @@ const pricingTiers: PricingTier[] = [
         <p class="problem-text">
           Mapping tools show you what the mountain looks like.
           They don't tell you what it <em>means</em>. That south-facing bench at 9,200 feet
-          with a 12-degree slope and a creek 300 meters below? During the rut at dawn,
+          with a 12-degree slope, a creek 300 meters below, and a 2021 burn edge feeding into timber? During the rut at dawn,
           that's a cow herd transition zone with a herd bull bedded in the timber above it.
           In late November, it's where 150 elk are soaking up solar warmth between feeding sessions.
         </p>
@@ -203,6 +229,26 @@ const pricingTiers: PricingTier[] = [
           You'd need 10 seasons of hunting that drainage to know that.
           <strong class="text-amber">Or you could open RidgeRead.</strong>
         </p>
+      </div>
+    </section>
+
+    <!-- ═══ NEW INTEL ═══ -->
+    <section class="intel-section">
+      <div class="section-inner">
+        <h2 class="section-heading">Built For Real Scouting Workflows</h2>
+        <p class="section-sub">
+          RidgeRead now connects your field history, burn-regrowth context, and point-level terrain inspection into one scouting loop.
+        </p>
+        <div class="intel-grid">
+          <article v-for="item in intelCards" :key="item.title" class="intel-card">
+            <div class="intel-label">
+              <q-icon :name="item.icon" size="15px" />
+              <span>{{ item.label }}</span>
+            </div>
+            <h3>{{ item.title }}</h3>
+            <p>{{ item.body }}</p>
+          </article>
+        </div>
       </div>
     </section>
 
@@ -273,19 +319,19 @@ const pricingTiers: PricingTier[] = [
         <h2 class="section-heading">Real Data. Not Guesswork.</h2>
         <div class="data-grid">
           <div class="data-item">
-            <div class="data-value">400</div>
-            <div class="data-label">Elevation points per analysis</div>
-            <div class="data-source">USGS Copernicus DEM — 90m resolution</div>
+            <div class="data-value">20-60</div>
+            <div class="data-label">Adaptive elevation grid</div>
+            <div class="data-source">USGS 3DEP first, Mapbox Terrain-RGB fallback</div>
           </div>
           <div class="data-item">
-            <div class="data-value">0.1–2 mi</div>
-            <div class="data-label">Custom buffer from roads & trails</div>
-            <div class="data-source">OpenStreetMap verified road network</div>
+            <div class="data-value">MTBS</div>
+            <div class="data-label">Burn-history context</div>
+            <div class="data-source">Burn name, year, acres, and perimeter extent</div>
           </div>
           <div class="data-item">
-            <div class="data-value">5</div>
-            <div class="data-label">Terrain features auto-detected</div>
-            <div class="data-source">Saddles, benches, ridges, drainages, finger ridges</div>
+            <div class="data-value">GPX</div>
+            <div class="data-label">Waypoint terrain inspection</div>
+            <div class="data-source">Imported pins graded through the POI model</div>
           </div>
           <div class="data-item">
             <div class="data-value">9</div>
@@ -544,10 +590,61 @@ const pricingTiers: PricingTier[] = [
   margin: 0;
 }
 
+/* ─── Intel Section ─── */
+.intel-section {
+  padding: 100px 24px;
+  background: #0f1923;
+}
+
+.intel-section .section-inner {
+  max-width: 1100px;
+}
+
+.intel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 24px;
+}
+
+.intel-card {
+  background:
+    linear-gradient(180deg, rgba(232, 197, 71, 0.06), rgba(17, 26, 36, 0) 42%),
+    #111a24;
+  border: 1px solid #26384a;
+  border-radius: 12px;
+  padding: 26px 24px;
+}
+
+.intel-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #e8c547;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.3px;
+  margin-bottom: 18px;
+}
+
+.intel-card h3 {
+  color: #fff;
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.3;
+  margin: 0 0 12px;
+}
+
+.intel-card p {
+  color: #8fa0ad;
+  font-size: 14px;
+  line-height: 1.75;
+  margin: 0;
+}
+
 /* ─── Seasons ─── */
 .seasons-section {
   padding: 100px 24px;
-  background: #0f1923;
+  background: #0a0e14;
 }
 
 .seasons-section .section-inner {
@@ -608,7 +705,7 @@ const pricingTiers: PricingTier[] = [
 /* ─── How It Works ─── */
 .how-it-works {
   padding: 100px 24px;
-  background: #0a0e14;
+  background: #0f1923;
 }
 
 .how-it-works .section-inner {
@@ -658,7 +755,7 @@ const pricingTiers: PricingTier[] = [
 /* ─── Data Section ─── */
 .data-section {
   padding: 100px 24px;
-  background: #0f1923;
+  background: #0a0e14;
 }
 
 .data-section .section-inner {
@@ -905,6 +1002,7 @@ const pricingTiers: PricingTier[] = [
   .hero { padding: 60px 16px 40px; }
   .hero-sub { font-size: 15px; }
   .features-grid { grid-template-columns: 1fr; }
+  .intel-grid { grid-template-columns: 1fr; }
   .season-cards { grid-template-columns: 1fr; }
   .steps-row { grid-template-columns: 1fr 1fr; }
   .data-grid { grid-template-columns: 1fr 1fr; }

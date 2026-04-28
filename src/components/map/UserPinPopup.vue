@@ -3,6 +3,7 @@ import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import type L from 'leaflet'
 import { useUserPinsStore } from '@/stores/userPins'
 import { pinTypeMeta, pinTypeOrder, type PinType } from '@/types/userPin'
+import CoordinateChip from '@/components/common/CoordinateChip.vue'
 
 const props = defineProps<{ map: L.Map | null }>()
 
@@ -10,9 +11,26 @@ const store = useUserPinsStore()
 
 const noteRef = ref<HTMLTextAreaElement | null>(null)
 const screenPos = ref<{ x: number; y: number } | null>(null)
+const dragOffset = ref({ x: 0, y: 0 })
+const isDragging = ref(false)
+
+let dragStart: { pointerId: number; x: number; y: number; offsetX: number; offsetY: number } | null = null
 
 const isOpen = computed(() => store.draft !== null)
 const isExisting = computed(() => !!store.draft?.id)
+const customIconKinds = new Set(['elk-antlers', 'binoculars', 'tracks'])
+
+const popupStyle = computed(() => {
+  if (!screenPos.value) return {}
+  return {
+    left: `${screenPos.value.x + dragOffset.value.x}px`,
+    top: `${screenPos.value.y + dragOffset.value.y}px`,
+  }
+})
+
+function isCustomIcon(type: PinType): boolean {
+  return customIconKinds.has(pinTypeMeta[type].iconKind ?? '')
+}
 
 function recomputePosition() {
   if (!props.map || !store.draft) {
@@ -24,14 +42,18 @@ function recomputePosition() {
 }
 
 watch(
-  () => [props.map, store.draft],
   () => {
+    const d = store.draft
+    return [props.map, d?.id ?? 'new', d?.lat ?? 0, d?.lng ?? 0, d ? 1 : 0] as const
+  },
+  () => {
+    dragOffset.value = { x: 0, y: 0 }
     recomputePosition()
     if (store.draft) {
       void nextTick(() => noteRef.value?.focus())
     }
   },
-  { immediate: true, deep: true },
+  { immediate: true },
 )
 
 // Keep popup pinned to the pin during pan/zoom.
@@ -77,6 +99,42 @@ function cancel() {
   store.closeDraft()
 }
 
+function onHeaderPointerDown(e: PointerEvent) {
+  if (e.button !== 0) return
+  if ((e.target as HTMLElement).closest('button')) return
+
+  e.preventDefault()
+  e.stopPropagation()
+  isDragging.value = true
+  dragStart = {
+    pointerId: e.pointerId,
+    x: e.clientX,
+    y: e.clientY,
+    offsetX: dragOffset.value.x,
+    offsetY: dragOffset.value.y,
+  }
+  window.addEventListener('pointermove', onWindowPointerMove)
+  window.addEventListener('pointerup', onWindowPointerUp)
+  window.addEventListener('pointercancel', onWindowPointerUp)
+}
+
+function onWindowPointerMove(e: PointerEvent) {
+  if (!dragStart || e.pointerId !== dragStart.pointerId) return
+  dragOffset.value = {
+    x: dragStart.offsetX + e.clientX - dragStart.x,
+    y: dragStart.offsetY + e.clientY - dragStart.y,
+  }
+}
+
+function onWindowPointerUp(e: PointerEvent) {
+  if (dragStart && e.pointerId !== dragStart.pointerId) return
+  isDragging.value = false
+  dragStart = null
+  window.removeEventListener('pointermove', onWindowPointerMove)
+  window.removeEventListener('pointerup', onWindowPointerUp)
+  window.removeEventListener('pointercancel', onWindowPointerUp)
+}
+
 function onKeydown(e: KeyboardEvent) {
   if (!isOpen.value) return
   if (e.key === 'Escape') {
@@ -89,25 +147,36 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => window.addEventListener('keydown', onKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('pointermove', onWindowPointerMove)
+  window.removeEventListener('pointerup', onWindowPointerUp)
+  window.removeEventListener('pointercancel', onWindowPointerUp)
+})
 </script>
 
 <template>
   <div
     v-if="isOpen && screenPos"
     class="user-pin-popup"
-    :style="{ left: `${screenPos.x}px`, top: `${screenPos.y}px` }"
+    :class="{ 'user-pin-popup--dragging': isDragging }"
+    :style="popupStyle"
     @click.stop
     @mousedown.stop
+    @pointerdown.stop
     @dblclick.stop
   >
     <div class="user-pin-popup__inner">
-      <header class="upp-header">
+      <header class="upp-header" @pointerdown="onHeaderPointerDown">
         <span class="upp-header-label">{{ isExisting ? 'Edit pin' : 'New pin' }}</span>
-        <button class="upp-close" type="button" :aria-label="'Close'" @click="cancel">
+        <button class="upp-close" type="button" :aria-label="'Close'" @pointerdown.stop @click="cancel">
           <q-icon name="close" size="14px" />
         </button>
       </header>
+
+      <div v-if="store.draft" class="upp-coord-row">
+        <CoordinateChip :lat="store.draft.lat" :lng="store.draft.lng" />
+      </div>
 
       <div class="upp-section-label">Type</div>
       <div class="upp-type-grid">
@@ -120,7 +189,53 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           type="button"
           @click="pickType(t)"
         >
-          <i class="material-icons">{{ pinTypeMeta[t].icon }}</i>
+          <i
+            v-if="!isCustomIcon(t)"
+            class="material-icons upp-type-icon"
+          >{{ pinTypeMeta[t].icon }}</i>
+          <svg
+            v-else-if="pinTypeMeta[t].iconKind === 'elk-antlers'"
+            class="upp-type-icon upp-type-icon--svg"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path d="M12 20v-6" />
+            <path d="M12 14c-2.6-1.2-4.5-3.8-5.2-6.8" />
+            <path d="M6.8 7.2 4.6 5" />
+            <path d="M7.4 9.7H4.2" />
+            <path d="M8.8 12.2 6.2 14.3" />
+            <path d="M12 14c2.6-1.2 4.5-3.8 5.2-6.8" />
+            <path d="M17.2 7.2 19.4 5" />
+            <path d="M16.6 9.7h3.2" />
+            <path d="M15.2 12.2l2.6 2.1" />
+            <path d="M10 20h4" />
+          </svg>
+          <svg
+            v-else-if="pinTypeMeta[t].iconKind === 'binoculars'"
+            class="upp-type-icon upp-type-icon--svg"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path d="M7.5 8.5 9 5.5h2l1 3" />
+            <path d="M16.5 8.5 15 5.5h-2l-1 3" />
+            <path d="M5.5 9.5h5v7h-5z" />
+            <path d="M13.5 9.5h5v7h-5z" />
+            <path d="M10.5 12h3" />
+            <path d="M6.8 16.5c0 1.1.9 2 2 2s2-.9 2-2" />
+            <path d="M13.2 16.5c0 1.1.9 2 2 2s2-.9 2-2" />
+          </svg>
+          <svg
+            v-else
+            class="upp-type-icon upp-type-icon--svg"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path d="M8.3 5.8c1.2 1.2 1.5 3.2.6 4.4-.9 1.2-2.7 1.1-4-.1-1.2-1.2-1.5-3.2-.6-4.4.9-1.2 2.7-1.1 4 .1Z" />
+            <path d="M15.7 13.8c1.2 1.2 1.5 3.2.6 4.4-.9 1.2-2.7 1.1-4-.1-1.2-1.2-1.5-3.2-.6-4.4.9-1.2 2.7-1.1 4 .1Z" />
+            <path d="M11.5 4.5c.8.3 1.2 1.2.9 2" />
+            <path d="M4.2 13.4c.8.3 1.2 1.2.9 2" />
+            <path d="M18.9 9c.8.3 1.2 1.2.9 2" />
+          </svg>
           <span>{{ pinTypeMeta[t].label }}</span>
         </button>
       </div>
@@ -163,6 +278,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   pointer-events: auto;
 }
 
+.user-pin-popup--dragging {
+  cursor: grabbing;
+}
+
 .user-pin-popup__inner {
   width: 280px;
   background: rgba(15, 25, 35, 0.96);
@@ -181,6 +300,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.user-pin-popup--dragging .upp-header {
+  cursor: grabbing;
 }
 
 .upp-header-label {
@@ -201,6 +326,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   display: inline-flex;
 }
 .upp-close:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+
+.upp-coord-row {
+  display: flex;
+  margin-bottom: 6px;
+}
 
 .upp-section-label {
   font-size: 10px;
@@ -235,9 +365,18 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   background: rgba(255, 255, 255, 0.06);
   color: #fff;
 }
-.upp-type-btn .material-icons {
+.upp-type-icon {
   font-size: 18px;
   color: var(--accent);
+}
+.upp-type-icon--svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .upp-type-btn span {
   font-size: 10px;
@@ -248,7 +387,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   border-color: var(--accent);
   color: #fff;
 }
-.upp-type-btn--active .material-icons { color: var(--accent); }
+.upp-type-btn--active .upp-type-icon { color: var(--accent); }
 
 .upp-note {
   width: 100%;

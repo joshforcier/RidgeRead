@@ -11,6 +11,18 @@ const subscriptionStore = useSubscriptionStore()
 const router = useRouter()
 const route = useRoute()
 
+const usageBadge = computed<{ short: string; tooltip: string } | null>(() => {
+  if (!subscriptionStore.hasAccess) return null
+  const limit = subscriptionStore.analysesLimit
+  if (limit === Infinity) return null // Guide — don't bother showing a counter
+  const used = subscriptionStore.analysesUsed
+  const remaining = Math.max(0, limit - used)
+  return {
+    short: `${remaining} / ${limit} left`,
+    tooltip: `${used} of ${limit} monthly analyses used. Resets on the 1st (UTC).`,
+  }
+})
+
 const trialBadge = computed<{ short: string; tooltip: string } | null>(() => {
   if (!subscriptionStore.isOnTrial) return null
   const days = subscriptionStore.trialDaysLeft
@@ -87,6 +99,18 @@ async function handleSignOut() {
       >
         <q-icon name="schedule" size="13px" />
         <span class="trial-badge-text">Trial: {{ trialBadge.short }}</span>
+      </div>
+
+      <!-- Usage badge (Pro only — Guide is unlimited) -->
+      <div
+        v-if="usageBadge"
+        class="usage-badge q-ml-sm"
+        :class="{ 'usage-badge--low': subscriptionStore.analysesRemaining <= 3 }"
+        :title="usageBadge.tooltip"
+        :aria-label="usageBadge.tooltip"
+      >
+        <q-icon name="bolt" size="13px" />
+        <span class="usage-badge-text">{{ usageBadge.short }}</span>
       </div>
 
       <!-- User menu -->
@@ -230,12 +254,41 @@ async function handleSignOut() {
 }
 
 @media (max-width: 599px) {
-  .trial-badge-text {
+  .trial-badge-text,
+  .usage-badge-text {
     display: none;
   }
-  .trial-badge {
+  .trial-badge,
+  .usage-badge {
     padding: 5px 7px;
   }
+}
+
+/* ─── Usage badge ─── */
+.usage-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #8aaedb;
+  background: rgba(96, 165, 250, 0.08);
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 12px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.usage-badge--low {
+  color: #ff8a8a;
+  background: rgba(213, 78, 78, 0.12);
+  border-color: rgba(213, 78, 78, 0.3);
+}
+
+.usage-badge-text {
+  line-height: 1;
 }
 
 /* ─── User ─── */

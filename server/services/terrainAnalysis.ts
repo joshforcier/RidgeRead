@@ -15,6 +15,7 @@
 
 import type { ElevationGrid, ElevationPoint } from './elevation'
 import type { OSMLandData } from '../routes/overpass'
+import type { FireHistoryFeature } from './fireHistory'
 
 // ─── Slope & Aspect ──────────────────────────────────────────
 
@@ -98,6 +99,59 @@ function haversineDist(lat1: number, lng1: number, lat2: number, lng2: number): 
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
+function pointToSegmentMeters(
+  p: { lat: number; lng: number },
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
+  const originLatRad = (p.lat * Math.PI) / 180
+  const metersPerLng = 111_320 * Math.cos(originLatRad)
+  const px = 0
+  const py = 0
+  const ax = (a.lng - p.lng) * metersPerLng
+  const ay = (a.lat - p.lat) * 111_320
+  const bx = (b.lng - p.lng) * metersPerLng
+  const by = (b.lat - p.lat) * 111_320
+  const dx = bx - ax
+  const dy = by - ay
+  const lenSq = dx * dx + dy * dy
+  if (lenSq === 0) return Math.sqrt(ax * ax + ay * ay)
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq))
+  const x = ax + t * dx
+  const y = ay + t * dy
+  return Math.sqrt(x * x + y * y)
+}
+
+function distanceToGeometryMeters(
+  pt: { lat: number; lng: number },
+  geometry: Array<{ lat: number; lng: number }>,
+): number {
+  if (geometry.length === 0) return Infinity
+  if (geometry.length === 1) return haversineDist(pt.lat, pt.lng, geometry[0].lat, geometry[0].lng)
+
+  let best = Infinity
+  for (let i = 0; i < geometry.length - 1; i++) {
+    best = Math.min(best, pointToSegmentMeters(pt, geometry[i], geometry[i + 1]))
+  }
+  const first = geometry[0]
+  const last = geometry[geometry.length - 1]
+  if (first.lat !== last.lat || first.lng !== last.lng) {
+    best = Math.min(best, pointToSegmentMeters(pt, last, first))
+  }
+  return best
+}
+
+function nearestDistanceToFeaturesMeters(
+  pt: { lat: number; lng: number },
+  features: Array<{ geometry: Array<{ lat: number; lng: number }> }>,
+): number {
+  let best = Infinity
+  for (const feature of features) {
+    best = Math.min(best, distanceToGeometryMeters(pt, feature.geometry))
+  }
+  return best
+}
+
 // ─── Feature Detection ──────────────────────────────────────
 
 interface TerrainFeature {
@@ -117,6 +171,15 @@ function detectFeatures(
   const features: TerrainFeature[] = []
   const { rows, cols } = grid
 
+  /**
+   * Saddle candidates are collected during the main loop and pruned at the
+   * end. Without pruning, a broad col produces a saddle feature at every grid
+   * cell that satisfies the topology — we'd emit half a dozen "saddles" for a
+   * single real one. Non-max suppression keeps only the lowest cell in each
+   * cluster (the natural crossing point), one feature per actual col.
+   */
+  const saddleCandidates: Array<{ r: number; c: number; pt: TerrainPoint }> = []
+
   for (let r = 1; r < rows - 1; r++) {
     for (let c = 1; c < cols - 1; c++) {
       const idx = r * cols + c
@@ -130,24 +193,75 @@ function detectFeatures(
       const neighbors = [above, below, left, right]
       const nElev = neighbors.map(n => n.elevation)
 
-      // Saddle: lower than two opposite neighbors, higher than the other two
+      // Saddle search: scan all cells within radius and bin them into 8 compass
+      // wedges (N, NE, E, SE, S, SW, W, NW). Track max + min elevation per
+      // wedge. This catches peaks at any azimuth — a single-ray search would
+      // miss a peak just a few degrees off the ray.
+      const SADDLE_SEARCH_RADIUS = 15 // cells; ~2.6 km at 175m production spacing
+      // Tactical elk saddles bracket peaks 1-3 km apart. Beyond ~3 km the
+      // wedge pattern starts catching regional topology (cross-valley
+      // mountains coincidentally satisfying the saddle topology) which
+      // isn't the kind of crossing elk actually use.
+      const wedgeHi = new Array(8).fill(-Infinity)
+      const wedgeLo = new Array(8).fill(Infinity)
+      for (let ddr = -SADDLE_SEARCH_RADIUS; ddr <= SADDLE_SEARCH_RADIUS; ddr++) {
+        for (let ddc = -SADDLE_SEARCH_RADIUS; ddc <= SADDLE_SEARCH_RADIUS; ddc++) {
+          if (ddr === 0 && ddc === 0) continue
+          const distSq = ddr * ddr + ddc * ddc
+          if (distSq > SADDLE_SEARCH_RADIUS * SADDLE_SEARCH_RADIUS) continue
+          const nr = r + ddr
+          const nc = c + ddc
+          if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue
+          // Compass azimuth: 0=N, 90=E, 180=S, 270=W. dr+ = N, dc+ = E.
+          let az = (Math.atan2(ddc, ddr) * 180) / Math.PI
+          if (az < 0) az += 360
+          // Bin: N is 337.5°-22.5°, so shift by 22.5° before dividing by 45°.
+          const w = Math.floor(((az + 22.5) % 360) / 45)
+          const elev = terrainPoints[nr * cols + nc].elevation
+          if (elev > wedgeHi[w]) wedgeHi[w] = elev
+          if (elev < wedgeLo[w]) wedgeLo[w] = elev
+        }
+      }
+
+      // Saddle: a col on a ridgeline. Test 4 axis pairs (every 45°) so we
+      // catch ridges at any orientation, not just N-S/E-W. Each axis pair
+      // names two "high" neighbors (the ridge spine) and two "low" neighbors
+      // (the drainage axis perpendicular to it).
+      //
+      // Magnitude check: BOTH highs must be ≥ SADDLE_RELIEF_M above the point
+      // AND both lows must be ≥ SADDLE_RELIEF_M below — otherwise a millimeter
+      // of noise on a flat ridgetop satisfies the topology test alone.
+      // 8m is calibrated for USGS 3DEP (sub-meter vertical accuracy).
       // "Low points on ridgelines where elk cross between drainages.
       //  Bulls frequently bugle from saddles because sound carries both directions."
-      const isHigherNS = pt.elevation > above.elevation && pt.elevation > below.elevation
-      const isLowerEW = pt.elevation < left.elevation && pt.elevation < right.elevation
-      const isHigherEW = pt.elevation > left.elevation && pt.elevation > right.elevation
-      const isLowerNS = pt.elevation < above.elevation && pt.elevation < below.elevation
+      const SADDLE_RELIEF_M = 8
+      // checkSaddleAxis: do both wedges A,B contain terrain ≥pt+8m AND both
+      // wedges C,D contain terrain ≤pt-8m? Wedge indices: 0=N, 1=NE, 2=E, ...
+      const checkSaddleAxis = (
+        highIdxA: number, highIdxB: number,
+        lowIdxA: number, lowIdxB: number,
+      ): boolean => {
+        const minHigh = Math.min(wedgeHi[highIdxA], wedgeHi[highIdxB])
+        const maxLow = Math.max(wedgeLo[lowIdxA], wedgeLo[lowIdxB])
+        return (
+          minHigh - pt.elevation >= SADDLE_RELIEF_M &&
+          pt.elevation - maxLow >= SADDLE_RELIEF_M
+        )
+      }
 
-      if ((isHigherNS && isLowerEW) || (isHigherEW && isLowerNS)) {
-        features.push({
-          type: 'saddle',
-          lat: pt.lat,
-          lng: pt.lng,
-          elevation: pt.elevation,
-          slope: pt.slope,
-          aspect: pt.aspectLabel,
-          description: `Saddle at ${mToFt(pt.elevation)}ft — natural crossing between drainages. Sound carries both directions; key travel funnel and ambush point for rut bugling and late-season migration.`,
-        })
+      // Slope cap: real elk-tactical saddles are gentle at the col point.
+      // Broad sidehills can satisfy the far-field wedge topology (higher
+      // uphill, lower downhill) without being a crossing. A 12° cap keeps
+      // saddles to actual low-gradient cols instead of ordinary slope cells.
+      const isSaddle =
+        pt.slope <= 12 &&
+        (checkSaddleAxis(0, 4, 2, 6) ||  // N-S ridge / E-W drainage
+         checkSaddleAxis(2, 6, 0, 4) ||  // E-W ridge / N-S drainage
+         checkSaddleAxis(1, 5, 3, 7) ||  // NE-SW ridge / NW-SE drainage
+         checkSaddleAxis(3, 7, 1, 5))    // NW-SE ridge / NE-SW drainage
+
+      if (isSaddle) {
+        saddleCandidates.push({ r, c, pt })
       }
 
       // Ridge: higher than all 4 cardinal neighbors
@@ -179,12 +293,28 @@ function detectFeatures(
         })
       }
 
-      // Bench: gentle slope on otherwise steep terrain
+      // Bench: gentle slope on otherwise steep terrain, sitting MID-slope
+      // (terrain rises meaningfully above AND drops meaningfully below).
+      // A bare slope-asymmetry test would also match drainage bottoms (gentle
+      // floor, steep walls — but everything around is HIGHER) and hilltops
+      // (gentle summit, steeper flanks — but everything around is LOWER).
+      // Both produce false benches, hence the explicit relief bounds below.
+      //
+      // Relief threshold of 8m is calibrated for USGS 3DEP (sub-meter
+      // vertical accuracy). The previous 15m was conservative around the
+      // ~3m noise floor of Mapbox Terrain-RGB; with 3DEP, 8m cleanly
+      // separates real benches from flat-ish noise while catching legitimate
+      // small mid-slope shelves the old threshold rejected.
       // "Benches and flats located 1/3 to 2/3 up a slope — high enough for thermal advantage,
       //  low enough for water/feed access. Steep sidehill benches are nearly unapproachable
       //  without detection."
       const avgNeighborSlope = neighbors.reduce((a, n) => a + n.slope, 0) / 4
-      if (pt.slope < 10 && avgNeighborSlope > 15) {
+      const maxN = Math.max(...nElev)
+      const minN = Math.min(...nElev)
+      const aboveRelief = maxN - pt.elevation // m of terrain rising above
+      const belowRelief = pt.elevation - minN // m of terrain dropping below
+      const isMidSlope = aboveRelief >= 8 && belowRelief >= 8
+      if (pt.slope < 10 && avgNeighborSlope > 15 && isMidSlope) {
         // Classify the bench by aspect for seasonal relevance
         const isNorthFacing = ['N', 'NE', 'NW'].includes(pt.aspectLabel)
         const isSouthFacing = ['S', 'SE', 'SW'].includes(pt.aspectLabel)
@@ -207,11 +337,12 @@ function detectFeatures(
         })
       }
 
-      // Finger ridge: higher than 2-3 neighbors with moderate slope
+      // Finger ridge: locally convex spur, not just a normal sidehill.
       // "Small ridges extending off main ridgelines into drainages.
       //  Satellite bulls bed on these. Bulls travel along the tops."
       const higherCount = nElev.filter(e => pt.elevation > e + 3).length
-      if (higherCount === 2 || higherCount === 3) {
+      const uphillCount = nElev.filter(e => e > pt.elevation + 3).length
+      if ((higherCount === 2 || higherCount === 3) && uphillCount <= 1) {
         if (pt.slope >= 8 && pt.slope <= 25) {
           features.push({
             type: 'finger-ridge',
@@ -227,11 +358,401 @@ function detectFeatures(
     }
   }
 
+  // Non-max suppression on saddle candidates: a wide col can satisfy the
+  // saddle pattern at every cell across its width, producing redundant
+  // features. Keep only candidates that are the lowest among their close
+  // neighbors (within 2 cells). The lowest cell in a col is also the
+  // natural crossing point — the spot elk actually use as the funnel.
+  const NMS_RADIUS = 2
+  for (const cand of saddleCandidates) {
+    const isLocalMin = saddleCandidates.every((other) => {
+      if (other === cand) return true
+      const dr = Math.abs(other.r - cand.r)
+      const dc = Math.abs(other.c - cand.c)
+      if (dr > NMS_RADIUS || dc > NMS_RADIUS) return true
+      return other.pt.elevation >= cand.pt.elevation
+    })
+    if (isLocalMin) {
+      const { pt } = cand
+      features.push({
+        type: 'saddle',
+        lat: pt.lat,
+        lng: pt.lng,
+        elevation: pt.elevation,
+        slope: pt.slope,
+        aspect: pt.aspectLabel,
+        description: `Saddle at ${mToFt(pt.elevation)}ft — natural crossing between drainages. Sound carries both directions; key travel funnel and ambush point for rut bugling and late-season migration.`,
+      })
+    }
+  }
+
   return features
+}
+
+function detectTransitionZones(
+  terrainPoints: TerrainPoint[],
+  landData: OSMLandData,
+  fireHistory: FireHistoryFeature[] = [],
+): TerrainFeature[] {
+  const openingSources = [
+    ...landData.meadows.map((feature) => ({ geometry: feature.geometry, kind: 'meadow' as const })),
+    ...landData.regrowth.map((feature) => ({ geometry: feature.geometry, kind: 'regrowth' as const })),
+    ...fireHistory.map((feature) => ({ geometry: feature.geometry, kind: 'burn' as const, fire: feature })),
+  ]
+  if (openingSources.length === 0) return []
+
+  const candidates: Array<{ feature: TerrainFeature; score: number }> = []
+  const hasForestData = landData.forests.length > 0
+
+  for (const pt of terrainPoints) {
+    let openingDist = Infinity
+    let openingSource: 'meadow' | 'regrowth' | 'burn' = 'meadow'
+    let openingFire: FireHistoryFeature | null = null
+    for (const opening of openingSources) {
+      const dist = distanceToGeometryMeters(pt, opening.geometry)
+      if (dist < openingDist) {
+        openingDist = dist
+        openingSource = opening.kind
+        openingFire = opening.kind === 'burn' ? opening.fire : null
+      }
+    }
+    if (openingDist < 100 || openingDist > 400) continue
+    if (pt.slope < 4 || pt.slope > 22) continue
+
+    const forestDist = hasForestData
+      ? nearestDistanceToFeaturesMeters(pt, landData.forests)
+      : Infinity
+    if (hasForestData && forestDist > 500) continue
+
+    const southAspect = ['S', 'SE', 'SW'].includes(pt.aspectLabel)
+    const northAspect = ['N', 'NE', 'NW'].includes(pt.aspectLabel)
+    const idealSlope = pt.slope >= 6 && pt.slope <= 16
+    const openingScore = 1 - Math.abs(openingDist - 225) / 225
+    const coverScore = hasForestData ? Math.max(0, 1 - forestDist / 500) : 0.4
+    const score =
+      openingScore * 35 +
+      coverScore * 25 +
+      (idealSlope ? 20 : 8) +
+      (southAspect ? 15 : northAspect ? 10 : 5) +
+      (openingSource === 'regrowth' ? 8 : 0) +
+      (openingSource === 'burn' ? burnValueBonus(openingFire) : 0)
+
+    const aspectNote = southAspect
+      ? 'south-facing edge: late-season feed-to-bed transition and solar bedding nearby'
+      : northAspect
+        ? 'north-facing edge: rut/post-rut cover transition with cooler bedding nearby'
+        : 'cross-slope edge: hunt by wind and thermal timing'
+    const coverNote = Number.isFinite(forestDist)
+      ? `${Math.round(forestDist)}m from mapped timber`
+      : 'timber proximity not mapped here'
+
+    const openingLabel = openingSource === 'burn'
+      ? fireLabel(openingFire)
+      : openingSource === 'regrowth'
+        ? 'Burn/regrowth proxy'
+        : 'Meadow'
+    const edgeBehavior = openingSource === 'burn'
+      ? burnBehaviorNote(openingFire)
+      : openingSource === 'regrowth'
+        ? 'new grass/brush regrowth draws elk, but daylight use clusters along the timber edge'
+        : 'elk feed in the opening but often stage in cover before fully committing'
+
+    candidates.push({
+      score,
+      feature: {
+        type: 'transition-zone',
+        lat: pt.lat,
+        lng: pt.lng,
+        elevation: pt.elevation,
+        slope: pt.slope,
+        aspect: pt.aspectLabel,
+        description:
+          `${openingLabel} transition zone ${Math.round(openingDist)}m off mapped opening, ${coverNote}. ` +
+          `${aspectNote}. ${edgeBehavior}; staging/ambush band for first and last light.`,
+      },
+    })
+  }
+
+  const selected: TerrainFeature[] = []
+  for (const cand of candidates.sort((a, b) => b.score - a.score)) {
+    if (selected.some((f) => haversineDist(f.lat, f.lng, cand.feature.lat, cand.feature.lng) < 350)) {
+      continue
+    }
+    selected.push(cand.feature)
+    if (selected.length >= 12) break
+  }
+  return selected
+}
+
+function burnValueBonus(fire: FireHistoryFeature | null): number {
+  if (!fire?.year) return 6
+  const age = new Date().getFullYear() - fire.year
+  if (age >= 3 && age <= 18) return 18
+  if (age >= 1 && age <= 25) return 12
+  return 4
+}
+
+function fireLabel(fire: FireHistoryFeature | null): string {
+  if (!fire) return 'MTBS burn'
+  const parts = ['MTBS burn']
+  if (fire.name) parts.push(fire.name)
+  if (fire.year) parts.push(String(fire.year))
+  if (fire.severity && fire.severity !== 'unknown') parts.push(`${fire.severity} severity`)
+  return parts.join(' / ')
+}
+
+function burnBehaviorNote(fire: FireHistoryFeature | null): string {
+  if (!fire?.year) {
+    return 'mapped burn perimeter: verify current regrowth, then prioritize elk use along nearby timber edge'
+  }
+  const age = new Date().getFullYear() - fire.year
+  if (age < 3) {
+    return 'recent burn: forage response may still be developing, but elk may stage along unburned timber edges'
+  }
+  if (age <= 18) {
+    return 'prime-age burn/regrowth: grass, forbs, and brush can draw elk, with daylight use concentrated near timber lines'
+  }
+  if (age <= 25) {
+    return 'maturing burn/regrowth: still useful if feed remains open, with timber-edge security becoming more important'
+  }
+  return 'older burn perimeter: treat as context only unless imagery confirms open feed or brush regrowth remains'
 }
 
 function mToFt(m: number): string {
   return Math.round(m * 3.28084).toLocaleString()
+}
+
+// ─── Single-point diagnostic ────────────────────────────────
+// Used by the dev /api/inspect-point endpoint. Mirrors the per-cell logic
+// in detectFeatures() but emits structured pass/fail reasons for each
+// feature type so we can debug "why isn't this spot a saddle?" questions
+// against specific lat/lng inputs.
+
+export interface PointInspection {
+  point: {
+    lat: number
+    lng: number
+    elevation: number
+    elevationFt: number
+    slope: number
+    aspect: string
+  }
+  neighbors: Record<'N' | 'S' | 'E' | 'W' | 'NE' | 'NW' | 'SE' | 'SW', number>
+  features: Record<
+    'saddle' | 'ridge' | 'drainage' | 'bench' | 'fingerRidge',
+    { detected: boolean; reason: string }
+  >
+}
+
+export function inspectTerrainAt(
+  terrainPoints: TerrainPoint[],
+  grid: ElevationGrid,
+  centerR: number,
+  centerC: number,
+): PointInspection | null {
+  const { rows, cols } = grid
+  // 15-cell radius at 200m default spacing = 3km coverage. Tactical elk
+  // saddles bracket peaks 1-3 km apart; beyond that the wedge pattern
+  // starts catching regional topology that isn't the kind of crossing
+  // elk actually use.
+  const SADDLE_SEARCH_RADIUS = 15
+  if (
+    centerR < SADDLE_SEARCH_RADIUS ||
+    centerR > rows - 1 - SADDLE_SEARCH_RADIUS ||
+    centerC < SADDLE_SEARCH_RADIUS ||
+    centerC > cols - 1 - SADDLE_SEARCH_RADIUS
+  ) {
+    return null
+  }
+  const pt = terrainPoints[centerR * cols + centerC]
+  if (!pt) return null
+
+  const above = terrainPoints[(centerR + 1) * cols + centerC]
+  const below = terrainPoints[(centerR - 1) * cols + centerC]
+  const left = terrainPoints[centerR * cols + (centerC - 1)]
+  const right = terrainPoints[centerR * cols + (centerC + 1)]
+  const ne = terrainPoints[(centerR + 1) * cols + (centerC + 1)]
+  const nw = terrainPoints[(centerR + 1) * cols + (centerC - 1)]
+  const se = terrainPoints[(centerR - 1) * cols + (centerC + 1)]
+  const sw = terrainPoints[(centerR - 1) * cols + (centerC - 1)]
+
+  const SADDLE_RELIEF_M = 8
+  const BENCH_RELIEF_M = 8
+
+  // ── Saddle: bin all cells in the 5km circle into 8 compass wedges, track
+  // max + min elevation per wedge. This avoids the off-axis miss that a
+  // single-ray search has when peaks aren't perfectly axis-aligned.
+  const wedgeHi = new Array(8).fill(-Infinity)
+  const wedgeLo = new Array(8).fill(Infinity)
+  for (let ddr = -SADDLE_SEARCH_RADIUS; ddr <= SADDLE_SEARCH_RADIUS; ddr++) {
+    for (let ddc = -SADDLE_SEARCH_RADIUS; ddc <= SADDLE_SEARCH_RADIUS; ddc++) {
+      if (ddr === 0 && ddc === 0) continue
+      if (ddr * ddr + ddc * ddc > SADDLE_SEARCH_RADIUS * SADDLE_SEARCH_RADIUS) continue
+      const nr = centerR + ddr
+      const nc = centerC + ddc
+      if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue
+      let az = (Math.atan2(ddc, ddr) * 180) / Math.PI
+      if (az < 0) az += 360
+      const w = Math.floor(((az + 22.5) % 360) / 45)
+      const elev = terrainPoints[nr * cols + nc].elevation
+      if (elev > wedgeHi[w]) wedgeHi[w] = elev
+      if (elev < wedgeLo[w]) wedgeLo[w] = elev
+    }
+  }
+
+  const wedgeNames = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+  const axes = [
+    { name: 'N-S ridge / E-W drainage',     hA: 0, hB: 4, lA: 2, lB: 6 },
+    { name: 'E-W ridge / N-S drainage',     hA: 2, hB: 6, lA: 0, lB: 4 },
+    { name: 'NE-SW ridge / NW-SE drainage', hA: 1, hB: 5, lA: 3, lB: 7 },
+    { name: 'NW-SE ridge / NE-SW drainage', hA: 7, hB: 3, lA: 1, lB: 5 },
+  ]
+
+  let saddleResult = { detected: false, reason: '' }
+  let bestSaddleAxis: { name: string; aboveRelief: number; belowRelief: number } | null = null
+  // Slope cap: a real elk-tactical saddle is gentle at the col point.
+  // 12° filters ordinary sidehills whose far-field relief happens to look
+  // like a saddle axis across several kilometers.
+  const SADDLE_MAX_SLOPE = 12
+  if (pt.slope > SADDLE_MAX_SLOPE) {
+    saddleResult.reason = `slope ${pt.slope.toFixed(1)}° (need ≤${SADDLE_MAX_SLOPE}° for a crossable col)`
+  } else {
+    for (const axis of axes) {
+      const aboveRelief = Math.min(wedgeHi[axis.hA], wedgeHi[axis.hB]) - pt.elevation
+      const belowRelief = pt.elevation - Math.max(wedgeLo[axis.lA], wedgeLo[axis.lB])
+      if (aboveRelief >= SADDLE_RELIEF_M && belowRelief >= SADDLE_RELIEF_M) {
+        saddleResult = {
+          detected: true,
+          reason: `${axis.name}: ${aboveRelief.toFixed(1)}m above, ${belowRelief.toFixed(1)}m below`,
+        }
+        break
+      }
+      if (
+        !bestSaddleAxis ||
+        aboveRelief + belowRelief > bestSaddleAxis.aboveRelief + bestSaddleAxis.belowRelief
+      ) {
+        bestSaddleAxis = { name: axis.name, aboveRelief, belowRelief }
+      }
+    }
+  }
+  if (!saddleResult.detected && bestSaddleAxis) {
+    // Show wedge max/min elevation in each of the 8 wedges (m vs pt).
+    const fmt = (n: number) => {
+      if (!Number.isFinite(n)) return '·'
+      const d = n - pt.elevation
+      return (d > 0 ? '+' : '') + d.toFixed(0)
+    }
+    const directional = wedgeNames
+      .map((name, i) => `${name}=${fmt(wedgeHi[i])}/${fmt(wedgeLo[i])}`)
+      .join(', ')
+    saddleResult.reason =
+      `closest axis "${bestSaddleAxis.name}": only ` +
+      `${bestSaddleAxis.aboveRelief.toFixed(1)}m above / ` +
+      `${bestSaddleAxis.belowRelief.toFixed(1)}m below (need ≥${SADDLE_RELIEF_M}m each). ` +
+      `wedge hi/lo: ${directional}`
+  }
+
+  const neighbors = [above, below, left, right]
+  const nElev = neighbors.map((n) => n.elevation)
+  const maxNeighbor = Math.max(...nElev)
+  const minNeighbor = Math.min(...nElev)
+  const ptAboveHighest = pt.elevation - maxNeighbor // +ve = pt above highest neighbor (ridge condition)
+  const ptBelowLowest = minNeighbor - pt.elevation  // +ve = pt below lowest neighbor (drainage condition)
+
+  // ── Ridge: pt higher than all 4 cardinal neighbors by ≥5m ──
+  // (i.e., pt is above its HIGHEST neighbor by ≥5m → above all of them)
+  const ridgeResult =
+    ptAboveHighest > 5
+      ? { detected: true, reason: `${ptAboveHighest.toFixed(1)}m above highest neighbor (need >5m)` }
+      : ptAboveHighest >= 0
+        ? { detected: false, reason: `only ${ptAboveHighest.toFixed(1)}m above highest neighbor (need >5m)` }
+        : { detected: false, reason: `highest neighbor is ${(-ptAboveHighest).toFixed(1)}m above pt` }
+
+  // ── Drainage: pt lower than all 4 cardinal neighbors by ≥5m ──
+  // (i.e., pt is below its LOWEST neighbor by ≥5m → below all of them)
+  const drainageResult =
+    ptBelowLowest > 5
+      ? { detected: true, reason: `${ptBelowLowest.toFixed(1)}m below lowest neighbor (need >5m)` }
+      : ptBelowLowest >= 0
+        ? { detected: false, reason: `only ${ptBelowLowest.toFixed(1)}m below lowest neighbor (need >5m)` }
+        : { detected: false, reason: `lowest neighbor is ${(-ptBelowLowest).toFixed(1)}m below pt` }
+
+  // ── Bench: gentle slope, steeper around, mid-slope position ──
+  const avgNeighborSlope = neighbors.reduce((a, n) => a + n.slope, 0) / 4
+  const maxN = Math.max(...nElev)
+  const minN = Math.min(...nElev)
+  const aboveRelief = maxN - pt.elevation
+  const belowRelief = pt.elevation - minN
+  const benchPasses =
+    pt.slope < 10 &&
+    avgNeighborSlope > 15 &&
+    aboveRelief >= BENCH_RELIEF_M &&
+    belowRelief >= BENCH_RELIEF_M
+  let benchReason: string
+  if (benchPasses) {
+    benchReason =
+      `slope ${pt.slope}° on ${avgNeighborSlope.toFixed(0)}° terrain, ` +
+      `${aboveRelief.toFixed(1)}m above / ${belowRelief.toFixed(1)}m below`
+  } else {
+    const fails: string[] = []
+    if (pt.slope >= 10) fails.push(`slope ${pt.slope}° (need <10°)`)
+    if (avgNeighborSlope <= 15) fails.push(`neighbors avg ${avgNeighborSlope.toFixed(0)}° (need >15°)`)
+    if (aboveRelief < BENCH_RELIEF_M) fails.push(`above relief ${aboveRelief.toFixed(1)}m (need ≥${BENCH_RELIEF_M}m)`)
+    if (belowRelief < BENCH_RELIEF_M) fails.push(`below relief ${belowRelief.toFixed(1)}m (need ≥${BENCH_RELIEF_M}m)`)
+    benchReason = fails.join('; ')
+  }
+  const benchResult = { detected: benchPasses, reason: benchReason }
+
+  // ── Finger ridge: locally convex spur, not ordinary sidehill ──
+  const higherCount = nElev.filter((e) => pt.elevation > e + 3).length
+  const uphillCount = nElev.filter((e) => e > pt.elevation + 3).length
+  const fingerRidgePasses =
+    (higherCount === 2 || higherCount === 3) && uphillCount <= 1 && pt.slope >= 8 && pt.slope <= 25
+  let fingerReason: string
+  if (fingerRidgePasses) {
+    fingerReason = `${higherCount}/4 neighbors lower, ${uphillCount}/4 uphill, slope ${pt.slope}°`
+  } else {
+    const fails: string[] = []
+    if (higherCount !== 2 && higherCount !== 3) {
+      fails.push(`${higherCount}/4 neighbors lower (need 2 or 3)`)
+    }
+    if (uphillCount > 1) {
+      fails.push(`${uphillCount}/4 neighbors uphill (need ≤1; otherwise this is a sidehill/saddle axis)`)
+    }
+    if (pt.slope < 8 || pt.slope > 25) {
+      fails.push(`slope ${pt.slope}° (need 8-25°)`)
+    }
+    fingerReason = fails.join('; ')
+  }
+  const fingerRidgeResult = { detected: fingerRidgePasses, reason: fingerReason }
+
+  return {
+    point: {
+      lat: pt.lat,
+      lng: pt.lng,
+      elevation: pt.elevation,
+      elevationFt: Math.round(pt.elevation * 3.28084),
+      slope: pt.slope,
+      aspect: pt.aspectLabel,
+    },
+    neighbors: {
+      N: above.elevation,
+      S: below.elevation,
+      E: right.elevation,
+      W: left.elevation,
+      NE: ne.elevation,
+      NW: nw.elevation,
+      SE: se.elevation,
+      SW: sw.elevation,
+    },
+    features: {
+      saddle: saddleResult,
+      ridge: ridgeResult,
+      drainage: drainageResult,
+      bench: benchResult,
+      fingerRidge: fingerRidgeResult,
+    },
+  }
 }
 
 // ─── Terrain Summary Builder ────────────────────────────────
@@ -247,10 +768,14 @@ export interface TerrainAnalysis {
 
 export function analyzeTerrainForPrompt(
   elevGrid: ElevationGrid,
-  landData: OSMLandData
+  landData: OSMLandData,
+  fireHistory: FireHistoryFeature[] = [],
 ): TerrainAnalysis {
   const terrainPoints = computeSlopeAspect(elevGrid)
-  const features = detectFeatures(terrainPoints, elevGrid)
+  const features = [
+    ...detectFeatures(terrainPoints, elevGrid),
+    ...detectTransitionZones(terrainPoints, landData, fireHistory),
+  ]
 
   // ── Elevation profile ──
   const elevFt = {
@@ -303,6 +828,7 @@ export function analyzeTerrainForPrompt(
   const drainageCount = features.filter(f => f.type === 'drainage').length
   const benchCount = features.filter(f => f.type === 'bench').length
   const fingerCount = features.filter(f => f.type === 'finger-ridge').length
+  const transitionCount = features.filter(f => f.type === 'transition-zone').length
 
   const featureParts: string[] = []
   if (saddleCount > 0) featureParts.push(`${saddleCount} saddle points (travel funnels, bugling stations)`)
@@ -310,6 +836,7 @@ export function analyzeTerrainForPrompt(
   if (drainageCount > 0) featureParts.push(`${drainageCount} drainage bottoms (water, wallows, thick timber at heads)`)
   if (benchCount > 0) featureParts.push(`${benchCount} benches (prime bedding — flat on steep terrain)`)
   if (fingerCount > 0) featureParts.push(`${fingerCount} finger ridges (satellite bull bedding, travel)`)
+  if (transitionCount > 0) featureParts.push(`${transitionCount} meadow/regrowth transition zones (feed-to-bed staging bands)`)
 
   const featureSummary = featureParts.length > 0
     ? `Detected terrain features: ${featureParts.join(', ')}.`
@@ -369,9 +896,22 @@ export function analyzeTerrainForPrompt(
     elkNotes.push(`${fingerCount} FINGER RIDGE(S). Small ridges extending off main ridgelines. Satellite bulls bed on these during rut (100-300m from herd bull, monitoring through scent/sound). Bulls travel along tops for wind advantage.`)
   }
 
+  if (transitionCount > 0) {
+    elkNotes.push(`${transitionCount} MEADOW/REGROWTH TRANSITION ZONE(S). These are measured 100-400m bands off mapped meadow, grass, scrub/heath, or clearcut-style openings on usable slope. High-value first/last-light staging terrain: elk feed in openings and burns/regrowth, but often stage along nearby timber before fully committing, especially under hunting pressure.`)
+  }
+
   // OSM land cover notes
   if (landData.meadows.length > 0) {
     elkNotes.push(`${landData.meadows.length} MAPPED MEADOW/GRASSLAND AREAS. Primary feeding zones. Elk rarely venture >100-200m from timber edge during daylight. The transition zone (100-400m band where timber thins to meadow) is the highest-probability encounter zone across all seasons. Hunt this band during first and last 90 minutes of daylight.`)
+  }
+
+  if (landData.regrowth.length > 0) {
+    elkNotes.push(`${landData.regrowth.length} MAPPED REGROWTH / BURN-CLEARCUT PROXY AREAS. Treat as potential early-successional feed only when paired with nearby timber. Fresh grass, forbs, and brush regrowth can be excellent elk feed; the stronger hunting setup is usually the timber line 100-400m off the opening, not the middle of the opening.`)
+  }
+
+  if (fireHistory.length > 0) {
+    const recent = fireHistory.filter((fire) => fire.year && fire.year >= new Date().getFullYear() - 20).length
+    elkNotes.push(`${fireHistory.length} MTBS BURN PERIMETER(S), ${recent} from the last 20 years. Burns are strongest when grass/forbs/brush have regenerated and unburned timber remains nearby. Prioritize 3-18 year burns and hunt the timber line 100-400m off the opening; older burns need imagery confirmation before treating them as active feed.`)
   }
 
   if (landData.forests.length > 0) {
@@ -406,9 +946,9 @@ export function analyzeTerrainForPrompt(
 export function formatFeaturesForPrompt(features: TerrainFeature[], limit = 25): string {
   if (features.length === 0) return ''
 
-  // Prioritize: saddles > benches > finger ridges > ridges > drainages
+  // Prioritize: saddles > transition zones > benches > finger ridges > ridges > drainages
   const priority: Record<string, number> = {
-    saddle: 0, bench: 1, 'finger-ridge': 2, ridge: 3, drainage: 4, 'transition-zone': 5,
+    saddle: 0, 'transition-zone': 1, bench: 2, 'finger-ridge': 3, ridge: 4, drainage: 5,
   }
   const sorted = [...features].sort((a, b) => (priority[a.type] ?? 9) - (priority[b.type] ?? 9))
   const selected = sorted.slice(0, limit)

@@ -19,6 +19,10 @@ dist/
 .env.local
 .env.*.local
 
+# Firebase Admin service account credentials — NEVER commit
+*-firebase-adminsdk-*.json
+service-account*.json
+
 # Logs
 *.log
 npm-debug.log*

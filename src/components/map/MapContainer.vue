@@ -12,6 +12,7 @@ import { useUserPinMarkers } from '@/composables/useUserPinMarkers'
 import { useMapStore } from '@/stores/map'
 import { useUserPinsStore } from '@/stores/userPins'
 import { useAuthStore } from '@/stores/auth'
+import { useScoutWaypointsStore } from '@/stores/scoutWaypoints'
 import { pointsOfInterest as defaultPois } from '@/data/pointsOfInterest'
 
 const mapRef = ref<HTMLElement | null>(null)
@@ -20,21 +21,25 @@ const mapStore = useMapStore()
 
 const selection = useSelectionBox(map)
 const measure = useMeasure(map)
-const { pois, hasResults, loading, error, analyzedArea, fromCache, generatePOIs, clearPOIs } = useAIPois(map)
+const { pois, hasResults, loading, error, errorCode, analyzedArea, fromCache, generatePOIs, clearPOIs, clearError } = useAIPois(map)
 
 const { terrainCells } = useHeatmap(map, analyzedArea)
 const { hoverScores, attach } = useHoverInfo(map, terrainCells)
 
-// Renderable POI list = (active analysis ∪ kept POIs from prior analyses) − user-deleted IDs.
-// Falls back to the bundled defaults only when nothing else is loaded.
+const scoutWaypointsStore = useScoutWaypointsStore()
+
+// Renderable POI list = (active analysis ∪ kept POIs ∪ imported scout waypoints)
+// − user-deleted IDs. Imported waypoints are synthesized into POI shapes so
+// the existing render + grading pipeline treats them identically to AI POIs.
 const renderedPois = computed(() => {
   const active = pois.value
   const kept = mapStore.keptPois
+  const scout = scoutWaypointsStore.synthesizedPois
   const activeIds = new Set(active.map((p) => p.id))
   const uniqueKept = kept.filter((p) => !activeIds.has(p.id))
-  const merged = active.length === 0 && uniqueKept.length === 0
+  const merged = active.length === 0 && uniqueKept.length === 0 && scout.length === 0
     ? defaultPois
-    : [...uniqueKept, ...active]
+    : [...uniqueKept, ...scout, ...active]
   if (mapStore.deletedPoiIds.size === 0) return merged
   return merged.filter((p) => !mapStore.deletedPoiIds.has(p.id))
 })
@@ -116,11 +121,11 @@ const measureActive = computed(() => measure.active.value)
 
 defineExpose({
   map, hoverScores,
-  pois, hasResults, loading, error, analyzedArea, fromCache,
+  pois, hasResults, loading, error, errorCode, analyzedArea, fromCache,
   selection,
   measureActive,
   toggleMeasure: () => measure.toggle(),
-  analyzeSelection, resetAll,
+  analyzeSelection, resetAll, clearError,
 })
 </script>
 
@@ -174,6 +179,16 @@ defineExpose({
   transform: translateX(-50%);
   font-size: 18px !important;
   pointer-events: none;
+}
+
+.user-pin-icon--svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .user-pin--draft .user-pin-svg path {

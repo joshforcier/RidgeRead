@@ -3,13 +3,15 @@ import { ref, computed, watch } from 'vue'
 import {
   collection,
   addDoc,
+  doc,
   query,
   where,
   onSnapshot,
   type Unsubscribe,
   type Timestamp,
 } from 'firebase/firestore'
-import { db } from '@/config/firebase'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from '@/config/firebase'
 import { useAuthStore } from './auth'
 import { PLANS, type PlanConfig } from '@/config/stripe'
 
@@ -34,13 +36,31 @@ export interface FirestoreSubscription {
   cancel_at_period_end?: boolean
 }
 
+/**
+ * Monthly analyze quotas — must match server/services/usage.ts (PLAN_LIMITS).
+ * Pro: 20/mo. Guide: unlimited. None: 0.
+ */
+const PLAN_LIMITS: Record<'pro' | 'guide' | 'none', number> = {
+  pro: 20,
+  guide: Infinity,
+  none: 0,
+}
+
+function currentMonthKey(date = new Date()): string {
+  const y = date.getUTCFullYear()
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0')
+  return `${y}-${m}`
+}
+
 export const useSubscriptionStore = defineStore('subscription', () => {
   const subscription = ref<FirestoreSubscription | null>(null)
   const loading = ref(true)
   const checkoutLoading = ref(false)
   const checkoutError = ref<string | null>(null)
+  const usageCount = ref(0)
 
   let unsub: Unsubscribe | null = null
+  let usageUnsub: Unsubscribe | null = null
   let activeUid: string | null = null
 
   const auth = useAuthStore()
@@ -77,6 +97,18 @@ export const useSubscriptionStore = defineStore('subscription', () => {
         loading.value = false
       },
     )
+
+    // Live-track current-month usage count so the UI can show "X / 20 left".
+    const usageRef = doc(db, 'customers', uid, 'usage', currentMonthKey())
+    usageUnsub = onSnapshot(
+      usageRef,
+      (snap) => {
+        usageCount.value = snap.exists() ? Number(snap.data()?.count ?? 0) : 0
+      },
+      (err) => {
+        console.error('[subscription] usage onSnapshot error:', err)
+      },
+    )
   }
 
   function unsubscribeFn() {
@@ -84,8 +116,13 @@ export const useSubscriptionStore = defineStore('subscription', () => {
       unsub()
       unsub = null
     }
+    if (usageUnsub) {
+      usageUnsub()
+      usageUnsub = null
+    }
     activeUid = null
     subscription.value = null
+    usageCount.value = 0
     loading.value = true
   }
 
@@ -119,6 +156,29 @@ export const useSubscriptionStore = defineStore('subscription', () => {
     const ms = end.getTime() - Date.now()
     if (ms <= 0) return 0
     return Math.ceil(ms / (24 * 60 * 60 * 1000))
+  })
+
+  /**
+   * Best-effort plan inference from the current subscription's price ID.
+   * Server is authoritative — this is for display only.
+   */
+  const plan = computed<'pro' | 'guide' | 'none'>(() => {
+    const sub = subscription.value as
+      | (FirestoreSubscription & { items?: Array<{ price?: { id?: string } }> })
+      | null
+    if (!sub) return 'none'
+    const priceId = sub.items?.[0]?.price?.id
+    if (priceId === PLANS.pro.priceId) return 'pro'
+    if (priceId === PLANS.guide.priceId) return 'guide'
+    return 'none'
+  })
+
+  const analysesLimit = computed(() => PLAN_LIMITS[plan.value])
+  const analysesUsed = computed(() => usageCount.value)
+  const analysesRemaining = computed(() => {
+    const lim = analysesLimit.value
+    if (lim === Infinity) return Infinity
+    return Math.max(0, lim - analysesUsed.value)
   })
 
   /**
@@ -175,6 +235,36 @@ export const useSubscriptionStore = defineStore('subscription', () => {
     checkoutError.value = null
   }
 
+  /**
+   * Open Stripe's hosted Customer Portal — the only correct way to *change*
+   * an existing subscription (upgrade, downgrade, cancel, update card).
+   * Calls the firestore-stripe-payments extension's `createPortalLink`
+   * Cloud Function and redirects to the returned URL.
+   */
+  async function openCustomerPortal(): Promise<void> {
+    if (!auth.user?.uid) {
+      checkoutError.value = 'Sign in before managing your subscription.'
+      return
+    }
+    checkoutLoading.value = true
+    checkoutError.value = null
+    try {
+      const createPortalLink = httpsCallable<
+        { returnUrl: string; locale?: string },
+        { url: string }
+      >(functions, 'ext-firestore-stripe-payments-createPortalLink')
+      const { data } = await createPortalLink({
+        returnUrl: `${window.location.origin}/map`,
+      })
+      window.location.assign(data.url)
+    } catch (err: unknown) {
+      console.error('[subscription] portal link error:', err)
+      checkoutError.value =
+        err instanceof Error ? err.message : 'Could not open billing portal'
+      checkoutLoading.value = false
+    }
+  }
+
   return {
     subscription,
     loading,
@@ -184,8 +274,13 @@ export const useSubscriptionStore = defineStore('subscription', () => {
     isOnTrial,
     trialEndDate,
     trialDaysLeft,
+    plan,
+    analysesLimit,
+    analysesUsed,
+    analysesRemaining,
     plans: PLANS,
     startCheckout,
+    openCustomerPortal,
     clearCheckoutError,
   }
 })

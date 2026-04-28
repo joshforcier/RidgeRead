@@ -8,13 +8,13 @@
 **Stop Guessing. Start Reading Terrain Like a 20-Year Guide.**
 
 ### Subheadline
-RidgeRead uses real elevation data, satellite land cover, and AI-powered terrain analysis to show you exactly where elk are feeding, bedding, wallowing, and traveling — for the season and time of day you're hunting.
+RidgeRead uses real elevation data, land cover, MTBS burn history, imported waypoint inspection, and AI-powered terrain analysis to show you exactly where elk are feeding, bedding, wallowing, and traveling — for the season and time of day you're hunting.
 
 ### CTA
 **[ Analyze Your Unit Free ] [ See It In Action ]**
 
 ### Hero supporting text
-Drop a pin on any 5-mile stretch of elk country. In seconds, RidgeRead pulls real USGS elevation, computes slope and aspect for every ridge and drainage, maps every meadow, stream, and timber stand from satellite data — then identifies the exact terrain features that hold elk right now. Not last month. Not in general. Right now, for your season, your time of day.
+Draw a box over any stretch of elk country. In seconds, RidgeRead pulls real USGS elevation, computes slope and aspect for every ridge and drainage, maps roads, trails, water, timber, meadows, burn history, and regrowth edges — then identifies the exact terrain features that hold elk right now. Not last month. Not in general. Right now, for your season, your time of day.
 
 ---
 
@@ -23,7 +23,7 @@ Drop a pin on any 5-mile stretch of elk country. In seconds, RidgeRead pulls rea
 ### Section Headline
 **You've got topo maps. You've got satellite imagery. You still walked past the elk.**
 
-Mapping tools show you what the mountain looks like. They don't tell you what it *means*. That south-facing bench at 9,200 feet with a 12-degree slope and a creek 300 meters below? During the rut at dawn, that's a cow herd transition zone with a herd bull bedded in the timber above it. In late November, it's where 150 elk are soaking up solar warmth between feeding sessions.
+Mapping tools show you what the mountain looks like. They don't tell you what it *means*. That south-facing bench at 9,200 feet with a 12-degree slope, a creek 300 meters below, and a 2021 burn edge feeding into timber? During the rut at dawn, that's a cow herd transition zone with a herd bull bedded in the timber above it. In late November, it's where 150 elk are soaking up solar warmth between feeding sessions.
 
 You'd need 10 seasons of hunting that drainage to know that. Or you could open RidgeRead.
 
@@ -35,7 +35,7 @@ You'd need 10 seasons of hunting that drainage to know that. Or you could open R
 
 **Headline:** Every ridge, bench, saddle, and drainage — measured and scored.
 
-We pull a 400-point elevation grid from USGS data for your selected area. From that, we compute actual slope angles, aspect directions, and relief — then run feature detection to find saddles (crossing funnels), benches (bedding flats on steep terrain), finger ridges (satellite bull travel), and drainage bottoms (wallows and water). These are real terrain features at real coordinates, not a colored heat blob.
+We pull an adaptive elevation grid from USGS 3DEP when available, with Mapbox Terrain-RGB as fallback. From that, we compute actual slope angles, aspect directions, and relief — then run feature detection to find saddles (crossing funnels), benches (bedding flats on steep terrain), finger ridges (satellite bull travel), ridgelines, and drainage bottoms (wallows and water). These are real terrain features at real coordinates, not a colored heat blob.
 
 ---
 
@@ -45,7 +45,7 @@ We pull a 400-point elevation grid from USGS data for your selected area. From t
 
 Our AI reads verified OpenStreetMap land cover — every mapped road, trail, stream, meadow, forest stand, and building in your area — combined with the computed elevation and slope data. It places points of interest on actual terrain features: a feeding zone on a real meadow within 200m of timber edge, a bedding area on a real north-facing bench at 9,400 feet with 60-80% canopy.
 
-Every POI comes with tactical advice referencing the real elevation, slope, and aspect at that spot.
+Every POI comes with tactical advice referencing the real elevation, slope, and aspect at that spot. Topographic POIs are anchored to detected features and validated against point-centered terrain inspection so the marker, panel, and coordinate check agree.
 
 And we enforce a customizable buffer from every road and trail — set it from 0.1 to 2 miles. If it's near a road, it's not elk habitat. Period.
 
@@ -83,7 +83,31 @@ Each layer shows a weight percentage that shifts with your season and time selec
 
 ---
 
-### 5. Works Anywhere in Elk Country
+### 5. Burn History + Regrowth Edges
+
+**Headline:** Burns matter when the grass is back and timber is close.
+
+RidgeRead pulls MTBS burn-history context for the selected area: fire name, year, acreage, and perimeter extent. Burns and regrowth openings are evaluated as feed only when they are paired with nearby security cover. The strongest setups are usually not in the middle of the burn — they are the 100-400m timber-edge staging bands where elk can feed, scent-check, and step back into cover.
+
+---
+
+### 6. Import Your Waypoints
+
+**Headline:** Turn old pins into terrain-checked scouting intel.
+
+Import GPX waypoints from onX-style exports. RidgeRead inspects every coordinate for elevation, slope, aspect, and terrain feature matches, then synthesizes each waypoint into the same POI grading and marker pipeline. Old pins for elk, glassing, bedding, water, wallows, rubs, and sign become structured scouting data with honest explanations.
+
+---
+
+### 7. Point-Level Terrain Inspection
+
+**Headline:** Know why a spot is or is not a bench, saddle, ridge, or drainage.
+
+The inspect-point workflow fetches a centered elevation grid around one coordinate and returns pass/fail reasons for each terrain type. It explains subtle cases like ordinary sidehills that look like benches in a big box selection, or broad cols that are close to a saddle but fail relief or slope checks.
+
+---
+
+### 8. Works Anywhere in Elk Country
 
 **Headline:** Flat Tops. Frank Church. Gila. Your spot.
 
@@ -102,10 +126,11 @@ RidgeRead was born from a simple frustration: all the mapping tools in the world
 
 ## HOW IT WORKS
 
-1. **Select your area.** Click the map to place a 5-mile analysis box on the terrain you're scouting.
+1. **Select your area.** Draw a box over the drainage, ridge system, burn edge, or winter range you're scouting.
 2. **Choose your season and time.** Rut, post-rut, or late season. Dawn, midday, or dusk.
-3. **Hit Analyze.** RidgeRead pulls real elevation data, maps land cover, detects terrain features, and generates AI-powered POIs — all in seconds.
-4. **Hunt smarter.** Tap any POI for tactical advice specific to that exact spot, season, and time of day. Toggle behavior layers to understand why elk use that terrain.
+3. **Add your intel.** Import GPX waypoints or start clean. Existing pins can be inspected and graded alongside new AI-generated POIs.
+4. **Hit Analyze.** RidgeRead pulls real elevation data, maps land cover, checks road pressure, finds burn history, detects terrain features, and generates AI-powered POIs — all in seconds.
+5. **Hunt smarter.** Tap any POI or imported waypoint for tactical advice specific to that exact spot, season, and time of day. Toggle behavior layers to understand why elk use that terrain.
 
 ---
 
@@ -116,18 +141,15 @@ RidgeRead was born from a simple frustration: all the mapping tools in the world
 - All behavior layers and season controls
 - Topo, satellite, street, and terrain base maps
 
-### Pro — $9.99/month
-- Unlimited analyses
+### Pro — $10/month
+- 20 analyses per month
+- GPX waypoint import and terrain inspection
+- MTBS burn-history context
 - Save and revisit analyzed areas
-- Offline map caching (mobile)
-- Priority AI processing
 
-### Guide — $24.99/month
+### Guide — $25/month
 - Everything in Pro
-- Client sharing — send analyzed areas to clients
-- Multi-unit batch analysis
-- Custom season date ranges
-- Priority support
+- Unlimited analyses
 
 **[ Start Free ] [ Go Pro ]**
 
@@ -147,8 +169,10 @@ You just need something that reads it for you.
 
 ## FOOTER NOTES
 
-- Real USGS elevation data (Copernicus DEM, 90m resolution)
-- OpenStreetMap verified land cover (roads, trails, streams, meadows, forests)
+- Real USGS 3DEP elevation data with Mapbox Terrain-RGB fallback
+- OpenStreetMap verified land cover (roads, trails, streams, meadows, forests, regrowth proxies)
+- MTBS burn-history context
+- GPX waypoint import and point-level terrain inspection
 - AI analysis powered by GPT — trained on terrain science, not guessing
 - Customizable road/trail buffer (0.1–2 miles)
 - Works on web, iOS, and Android

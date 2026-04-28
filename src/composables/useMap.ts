@@ -5,6 +5,7 @@ import { useMapStore, type BaseLayer } from '@/stores/map'
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string
 
 interface LayerDef {
+  kind?: 'tile' | 'arcgis-export'
   url: string
   attribution: string
   tileSize: number
@@ -13,6 +14,8 @@ interface LayerDef {
   maxNativeZoom?: number
   opacity?: number
 }
+
+type TileCoords = { x: number; y: number; z: number }
 
 function mapboxLayer(style: string, opacity?: number): LayerDef {
   return {
@@ -30,18 +33,55 @@ const layerDefs: Record<BaseLayer, LayerDef[]> = {
   satellite: [mapboxLayer('mapbox/satellite-v9')],
   outdoors: [mapboxLayer('mapbox/outdoors-v12')],
   hybrid: [mapboxLayer('joshforcier/cmnyygiw9006x01qv8bpg574v')],
-  // USGS 3DEP LIDAR-derived shaded relief — ~1m resolution over most of the
-  // US West. Reveals benches, drainages, and blowdown hidden under canopy.
-  // USGS caps native tiles at zoom 16; we allow rendering beyond that so
-  // Leaflet up-samples the z16 tiles instead of going blank.
+  // USGS 3DEP LIDAR-derived shaded relief. The cached `/tile/{z}/{y}/{x}`
+  // endpoint advertises deep zoom levels but returns 404 for many normal
+  // Web Mercator tile coordinates, which makes Leaflet show grey tiles.
+  // The dynamic `/export` endpoint is bbox-based and returns imagery for the
+  // same map area, so we use it through a lightweight GridLayer-style tile URL.
   lidar: [{
-    url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSShadedReliefOnly/MapServer/tile/{z}/{y}/{x}',
+    kind: 'arcgis-export',
+    url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSShadedReliefOnly/MapServer/export',
     attribution: 'Shaded relief &copy; <a href="https://www.usgs.gov/">USGS 3DEP</a>',
     tileSize: 256,
     zoomOffset: 0,
     maxZoom: 22,
-    maxNativeZoom: 16,
   }],
+}
+
+function createArcGisExportLayer(def: LayerDef): L.TileLayer {
+  const layer = L.tileLayer('', {
+    tileSize: def.tileSize,
+    zoomOffset: def.zoomOffset,
+    maxZoom: def.maxZoom,
+    opacity: def.opacity ?? 1,
+    attribution: def.attribution,
+  })
+
+  layer.getTileUrl = function getArcGisExportTileUrl(coords: TileCoords): string {
+    const map = this._map
+    const tileSize = this.getTileSize()
+    const nwPoint = L.point(coords.x * tileSize.x, coords.y * tileSize.y)
+    const sePoint = nwPoint.add(tileSize)
+    const nw = map.unproject(nwPoint, coords.z)
+    const se = map.unproject(sePoint, coords.z)
+    const bounds = L.latLngBounds(se, nw)
+    const sw3857 = L.CRS.EPSG3857.project(bounds.getSouthWest())
+    const ne3857 = L.CRS.EPSG3857.project(bounds.getNorthEast())
+
+    const params = new URLSearchParams({
+      bbox: `${sw3857.x},${sw3857.y},${ne3857.x},${ne3857.y}`,
+      bboxSR: '3857',
+      imageSR: '3857',
+      size: `${tileSize.x},${tileSize.y}`,
+      format: 'png',
+      transparent: 'false',
+      f: 'image',
+    })
+
+    return `${def.url}?${params.toString()}`
+  }
+
+  return layer
 }
 
 export function useMap(containerRef: Ref<HTMLElement | null>) {
@@ -56,14 +96,16 @@ export function useMap(containerRef: Ref<HTMLElement | null>) {
     currentTileLayers = []
 
     for (const def of layerDefs[layer]) {
-      const tl = L.tileLayer(def.url, {
-        tileSize: def.tileSize,
-        zoomOffset: def.zoomOffset,
-        maxZoom: def.maxZoom,
-        maxNativeZoom: def.maxNativeZoom,
-        opacity: def.opacity ?? 1,
-        attribution: def.attribution,
-      })
+      const tl = def.kind === 'arcgis-export'
+        ? createArcGisExportLayer(def)
+        : L.tileLayer(def.url, {
+          tileSize: def.tileSize,
+          zoomOffset: def.zoomOffset,
+          maxZoom: def.maxZoom,
+          maxNativeZoom: def.maxNativeZoom,
+          opacity: def.opacity ?? 1,
+          attribution: def.attribution,
+        })
       tl.addTo(instance)
       currentTileLayers.push(tl)
     }

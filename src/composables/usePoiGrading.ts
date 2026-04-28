@@ -16,13 +16,13 @@ export type ConfidenceMap = Partial<Record<BehaviorLayer, number>>
  * Per-POI per-behavior confidence (0–100). Each position in a POI's
  * `relatedBehaviors` array gets a base confidence from its rank, then is
  * modulated (but not dominated) by the current season/time/pressure weight.
- * The base ceiling (85) prevents the "everything is 100%" saturation we'd
+ * The base ceiling (92) prevents the "everything is 100%" saturation we'd
  * get by multiplying weights × large position multipliers.
  *
  * Dominance is decided separately by {@link dominantBehavior} using position
  * order, so a POI's hex color/glyph stays consistent across time-of-day.
  */
-const POSITION_BASE = [85, 65, 50, 38, 30, 25] as const
+const POSITION_BASE = [92, 78, 62, 48, 38, 30] as const
 
 export function deriveConfidence(
   poi: PointOfInterest,
@@ -32,9 +32,9 @@ export function deriveConfidence(
   poi.relatedBehaviors.forEach((b, i) => {
     const base = POSITION_BASE[i] ?? 25
     const weight = currentWeights[b] ?? 0 // 0..1
-    // 0.5–1.0 modulation of the base: keeps position order mostly intact
-    // while still letting time-of-day nudge numeric confidences up/down.
-    const value = base * (0.5 + weight * 0.5)
+    // 0.65–1.0 modulation of the base: keeps position order intact while
+    // letting time-of-day separate prime windows from merely plausible ones.
+    const value = base * (0.65 + weight * 0.35)
     conf[b] = Math.min(100, Math.max(0, Math.round(value)))
   })
   return conf
@@ -68,8 +68,9 @@ export function topConfidence(
 }
 
 /**
- * Composite 0–100 grade. Rewards high-confidence overlap, penalises
- * thin single-signal POIs.
+ * Composite 0–100 grade. The top behavior carries most of the grade because
+ * a focused POI can be excellent for one job; secondary overlap adds lift
+ * without requiring every good spot to be multi-purpose.
  */
 export function gradePoi(
   poi: PointOfInterest,
@@ -85,19 +86,20 @@ export function gradePoi(
   const top = conf[sorted[0]] ?? 0
   const avg =
     behaviors.reduce((s, b) => s + (conf[b] ?? 0), 0) / behaviors.length
-  const overlapBonus = Math.min(15, (behaviors.length - 1) * 6)
+  const overlapBonus = Math.min(14, (behaviors.length - 1) * 8)
+  const focusBonus = behaviors.length === 1 && top >= 78 ? 4 : 0
 
-  let score = top * 0.6 + avg * 0.25 + overlapBonus
-  if (behaviors.length === 1 && top < 50) score -= 10
+  let score = top * 0.78 + avg * 0.12 + overlapBonus + focusBonus
+  if (behaviors.length === 1 && top < 55) score -= 8
   score = Math.max(0, Math.min(100, score))
   const rounded = Math.round(score)
 
-  if (rounded >= 92) return { grade: 'A+', score: rounded, label: 'Prime' }
-  if (rounded >= 82) return { grade: 'A', score: rounded, label: 'Strong' }
-  if (rounded >= 73) return { grade: 'B+', score: rounded, label: 'Solid' }
-  if (rounded >= 63) return { grade: 'B', score: rounded, label: 'Viable' }
-  if (rounded >= 53) return { grade: 'C+', score: rounded, label: 'Marginal' }
-  if (rounded >= 43) return { grade: 'C', score: rounded, label: 'Weak' }
+  if (rounded >= 91) return { grade: 'A+', score: rounded, label: 'Prime' }
+  if (rounded >= 80) return { grade: 'A', score: rounded, label: 'Strong' }
+  if (rounded >= 70) return { grade: 'B+', score: rounded, label: 'Solid' }
+  if (rounded >= 60) return { grade: 'B', score: rounded, label: 'Viable' }
+  if (rounded >= 50) return { grade: 'C+', score: rounded, label: 'Marginal' }
+  if (rounded >= 40) return { grade: 'C', score: rounded, label: 'Weak' }
   return { grade: 'D', score: rounded, label: 'Skip' }
 }
 
