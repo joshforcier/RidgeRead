@@ -24,6 +24,7 @@ const userPinsStore = useUserPinsStore()
 const authStore = useAuthStore()
 const subscriptionStore = useSubscriptionStore()
 const scoutWaypointsStore = useScoutWaypointsStore()
+const isDevBuild = import.meta.env.DEV
 
 // ─── GPX import ───
 const gpxFileInput = ref<HTMLInputElement | null>(null)
@@ -476,7 +477,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- Dev: inspect a single coordinate's terrain classification -->
-        <div class="inspect-section">
+        <div v-if="isDevBuild" class="inspect-section">
           <button class="inspect-toggle" type="button" @click="inspectExpanded = !inspectExpanded">
             <q-icon :name="inspectExpanded ? 'expand_less' : 'expand_more'" size="14px" />
             <span>Inspect point (dev)</span>

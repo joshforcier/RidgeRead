@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useSubscriptionStore } from '@/stores/subscription'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
+import FeedbackModal from '@/components/common/FeedbackModal.vue'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const subscriptionStore = useSubscriptionStore()
 const router = useRouter()
-const route = useRoute()
+const feedbackOpen = ref(false)
 
 const usageBadge = computed<{ short: string; tooltip: string } | null>(() => {
   if (!subscriptionStore.hasAccess) return null
@@ -135,6 +136,15 @@ async function handleSignOut() {
                 </q-item-section>
               </q-item>
               <q-separator color="grey-9" />
+              <q-item clickable v-close-popup class="feedback-item" @click="feedbackOpen = true">
+                <q-item-section avatar>
+                  <q-icon name="lightbulb" color="amber-5" />
+                </q-item-section>
+                <q-item-section>
+                  <q-item-label class="feedback-label">Feedback or Idea</q-item-label>
+                </q-item-section>
+              </q-item>
+              <q-separator color="grey-9" />
               <q-item clickable v-close-popup @click="handleSignOut" class="signout-item">
                 <q-item-section avatar>
                   <q-icon name="logout" color="red-4" />
@@ -149,6 +159,8 @@ async function handleSignOut() {
       </div>
     </q-toolbar>
   </q-header>
+
+  <FeedbackModal v-model="feedbackOpen" />
 </template>
 
 <style scoped>
@@ -310,6 +322,14 @@ async function handleSignOut() {
 
 .signout-item:hover {
   background: rgba(244, 67, 54, 0.08);
+}
+
+.feedback-label {
+  color: #c8d6e5;
+}
+
+.feedback-item:hover {
+  background: rgba(232, 197, 71, 0.08);
 }
 
 /* ─── Mobile ─── */
