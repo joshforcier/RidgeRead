@@ -19,7 +19,12 @@ import {
 } from '../services/terrainAnalysis.js'
 import { isInElkRange } from '../services/elkRange.js'
 import { fetchFireHistory, summarizeFireHistory } from '../services/fireHistory.js'
-import { checkAndIncrementUsage } from '../services/usage.js'
+import {
+  checkAndIncrementUsage,
+  estimateOpenAICostUsd,
+  recordOpenAITokenUsage,
+  type OpenAITokenUsageEntry,
+} from '../services/usage.js'
 import type { AuthedRequest } from '../middleware/auth.js'
 
 function getClient(): OpenAI {
@@ -48,6 +53,7 @@ const DEFAULT_BUFFER_MILES = 0.5
 
 const TIMES = ['dawn', 'midday', 'dusk'] as const
 const PRESSURES = ['low', 'medium', 'high'] as const
+const OPENAI_MODEL = 'gpt-5.4-mini'
 
 /**
  * Find the nearest terrain grid point to a given lat/lng and return
@@ -462,7 +468,7 @@ PLACEMENT RULES:
 7. For "${timeOfDay}" specifically: focus POIs on the behaviors with the highest weights for this time window.
 8. NEVER place POIs in a straight line, evenly-spaced row, or regular grid pattern. Real elk terrain is irregular — POIs should follow the natural shape of drainages, ridgelines, and meadow edges, never share the same latitude or longitude, and never be uniformly spaced. If two POIs would land within ~150m of each other, drop one. If you cannot find enough genuinely distinct terrain features, return FEWER POIs rather than fabricating positions to fill the area.
 
-Generate up to 20 points of interest. Only generate POIs where the terrain genuinely supports the behavior — if the area lacks suitable terrain for a behavior, generate fewer or zero POIs for it. Quality over quantity. Coordinates STRICTLY WITHIN bounds. Empty arrays are acceptable when terrain doesn't support a behavior — DO NOT pad with grid-pattern POIs.
+Generate up to 10 high-quality points of interest. Only generate POIs where the terrain genuinely supports the behavior — if the area lacks suitable terrain for a behavior, generate fewer or zero POIs for it. Quality over quantity. Coordinates STRICTLY WITHIN bounds. Empty arrays are acceptable when terrain doesn't support a behavior — DO NOT pad with grid-pattern POIs.
 
 POI types: meadow, transition-zone, drainage, wallow, saddle, spring, bench, ridge, finger-ridge
 Behaviors: feeding, water, bedding, wallows, travel, security
@@ -684,6 +690,7 @@ ${features.join('\n')}
 
     type ComboKey = `${typeof TIMES[number]}_${typeof PRESSURES[number]}`
     const comboResults: Record<string, unknown[]> = {}
+    const openaiUsageEntries: OpenAITokenUsageEntry[] = []
 
     // Season is fixed from the request body
     const season = (req.body as GeneratePOIRequest).season || 'rut'
@@ -702,12 +709,47 @@ ${features.join('\n')}
           )
 
           const completion = await openai.chat.completions.create({
-            model: 'gpt-5.4-mini',
+            model: OPENAI_MODEL,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.7,
             max_completion_tokens: 8000,
             response_format: { type: 'json_object' },
           })
+
+          const tokenUsage = completion.usage as
+            | {
+                prompt_tokens?: number
+                completion_tokens?: number
+                total_tokens?: number
+                prompt_tokens_details?: { cached_tokens?: number }
+              }
+            | undefined
+          const promptTokens = tokenUsage?.prompt_tokens ?? 0
+          const completionTokens = tokenUsage?.completion_tokens ?? 0
+          const totalTokens = tokenUsage?.total_tokens ?? promptTokens + completionTokens
+          const cachedPromptTokens = tokenUsage?.prompt_tokens_details?.cached_tokens ?? 0
+          const estimatedCostUsd = estimateOpenAICostUsd({
+            model: OPENAI_MODEL,
+            promptTokens,
+            completionTokens,
+            cachedPromptTokens,
+          })
+
+          if (totalTokens > 0) {
+            openaiUsageEntries.push({
+              model: OPENAI_MODEL,
+              comboKey: key,
+              promptTokens,
+              completionTokens,
+              totalTokens,
+              cachedPromptTokens,
+              estimatedCostUsd,
+            })
+            console.log(
+              `  ${key}: OpenAI usage ${promptTokens} in (${cachedPromptTokens} cached), ` +
+              `${completionTokens} out, est $${estimatedCostUsd.toFixed(4)}`,
+            )
+          }
 
           const choice = completion.choices[0]
           const content = choice?.message?.content
@@ -1060,6 +1102,31 @@ ${features.join('\n')}
 
     const totalPois = Object.values(comboResults).reduce((sum, arr) => sum + arr.length, 0)
     console.log(`All 9 combos complete — ${totalPois} total POIs across all combinations`)
+
+    if (openaiUsageEntries.length > 0) {
+      const totals = openaiUsageEntries.reduce(
+        (acc, entry) => {
+          acc.promptTokens += entry.promptTokens
+          acc.completionTokens += entry.completionTokens
+          acc.totalTokens += entry.totalTokens
+          acc.cachedPromptTokens += entry.cachedPromptTokens
+          acc.estimatedCostUsd += entry.estimatedCostUsd
+          return acc
+        },
+        { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedPromptTokens: 0, estimatedCostUsd: 0 },
+      )
+      console.log(
+        `OpenAI analysis usage: ${openaiUsageEntries.length} calls, ` +
+        `${totals.promptTokens} input (${totals.cachedPromptTokens} cached), ` +
+        `${totals.completionTokens} output, ${totals.totalTokens} total, ` +
+        `est $${totals.estimatedCostUsd.toFixed(4)}`,
+      )
+      try {
+        await recordOpenAITokenUsage(uid, usage.monthKey, openaiUsageEntries)
+      } catch (err) {
+        console.error('[usage] failed to record OpenAI token usage:', err)
+      }
+    }
 
     res.json({ combos: comboResults, season, usage })
   } catch (err: unknown) {

@@ -36,6 +36,42 @@ export interface UsageState {
   monthKey: string
 }
 
+export interface OpenAITokenUsageEntry {
+  model: string
+  comboKey: string
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  cachedPromptTokens: number
+  estimatedCostUsd: number
+}
+
+const OPENAI_PRICES_PER_1M: Record<string, { input: number; cachedInput: number; output: number }> = {
+  'gpt-5.4-mini': { input: 0.75, cachedInput: 0.075, output: 4.50 },
+}
+
+export function estimateOpenAICostUsd(params: {
+  model: string
+  promptTokens: number
+  completionTokens: number
+  cachedPromptTokens?: number
+}): number {
+  const price = OPENAI_PRICES_PER_1M[params.model]
+  if (!price) return 0
+
+  const cachedPromptTokens = Math.min(
+    Math.max(0, params.cachedPromptTokens ?? 0),
+    params.promptTokens,
+  )
+  const uncachedPromptTokens = Math.max(0, params.promptTokens - cachedPromptTokens)
+
+  return (
+    (uncachedPromptTokens / 1_000_000) * price.input +
+    (cachedPromptTokens / 1_000_000) * price.cachedInput +
+    (params.completionTokens / 1_000_000) * price.output
+  )
+}
+
 function currentMonthKey(date = new Date()): string {
   // YYYY-MM in UTC. Using UTC avoids "the user's local month" drift across
   // timezones — billing and quota windows align on calendar UTC months.
@@ -141,4 +177,58 @@ export async function getUsage(uid: string): Promise<UsageState> {
     .get()
   const used = snap.exists ? Number(snap.data()?.count ?? 0) : 0
   return { plan, used, limit, remaining: Math.max(0, limit - used), monthKey }
+}
+
+export async function recordOpenAITokenUsage(
+  uid: string,
+  monthKey: string,
+  entries: OpenAITokenUsageEntry[],
+): Promise<void> {
+  if (entries.length === 0) return
+
+  const totals = entries.reduce(
+    (acc, entry) => {
+      acc.calls += 1
+      acc.promptTokens += entry.promptTokens
+      acc.completionTokens += entry.completionTokens
+      acc.totalTokens += entry.totalTokens
+      acc.cachedPromptTokens += entry.cachedPromptTokens
+      acc.estimatedCostUsd += entry.estimatedCostUsd
+      return acc
+    },
+    {
+      calls: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      cachedPromptTokens: 0,
+      estimatedCostUsd: 0,
+    },
+  )
+
+  const usageRef = adminDb.collection('customers').doc(uid).collection('usage').doc(monthKey)
+  const analysisRef = usageRef.collection('openaiAnalyses').doc()
+  const batch = adminDb.batch()
+
+  batch.set(
+    usageRef,
+    {
+      openaiCalls: FieldValue.increment(totals.calls),
+      openaiPromptTokens: FieldValue.increment(totals.promptTokens),
+      openaiCompletionTokens: FieldValue.increment(totals.completionTokens),
+      openaiTotalTokens: FieldValue.increment(totals.totalTokens),
+      openaiCachedPromptTokens: FieldValue.increment(totals.cachedPromptTokens),
+      openaiEstimatedCostUsd: FieldValue.increment(totals.estimatedCostUsd),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  )
+
+  batch.set(analysisRef, {
+    createdAt: FieldValue.serverTimestamp(),
+    totals,
+    entries,
+  })
+
+  await batch.commit()
 }

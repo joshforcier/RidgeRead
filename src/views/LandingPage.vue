@@ -82,7 +82,7 @@ const seasonCards = [
     aspect: 'North / NE facing',
     slope: '10–30°',
     key: 'Saddles, wallows, meadow edges',
-    detail: 'Bulls bugle from saddles. Bed on north-facing benches with 60-80% canopy within 400m of water. Wallows are critical — flat boggy areas at drainage heads.',
+    detail: 'Bulls bugle from saddles. Bed on north-facing benches with 60-80% canopy within 400m of water. Wallows are critical, flat boggy areas at drainage heads.',
   },
   {
     season: 'Post-Rut',
@@ -92,7 +92,7 @@ const seasonCards = [
     aspect: 'North / NE facing',
     slope: '20–40°',
     key: 'Dark timber, blowdown, steep bowls',
-    detail: 'Bulls go silent. Lost 15-20% body weight. Densest timber available — 80%+ canopy, deadfall. If you can see 50 yards, it\'s not thick enough.',
+    detail: 'Bulls go silent. Lost 15-20% body weight. Densest timber available, 80%+ canopy, deadfall. If you can see 50 yards, it\'s not thick enough.',
   },
   {
     season: 'Late Season',
@@ -140,8 +140,6 @@ const pricingTiers: PricingTier[] = [
       { text: 'All 5 behavior layers', included: true },
       { text: 'All 4 base maps', included: true },
       { text: 'Season & time controls', included: true },
-      { text: 'Save & revisit areas', included: true },
-      { text: 'Offline maps (mobile)', included: true },
     ],
     cta: 'Start Free Trial',
   },
@@ -158,8 +156,6 @@ const pricingTiers: PricingTier[] = [
       { text: 'All 5 behavior layers', included: true },
       { text: 'All 4 base maps', included: true },
       { text: 'Season & time controls', included: true },
-      { text: 'Save & revisit areas', included: true },
-      { text: 'Offline maps (mobile)', included: true },
     ],
     cta: 'Start Guiding',
   },
@@ -181,7 +177,7 @@ const pricingTiers: PricingTier[] = [
         </h1>
         <p class="hero-sub">
           Real USGS terrain analysis, land cover, road pressure, MTBS burn history,
-          and your own imported waypoints — all translated into elk-specific scouting intel for the season and time you hunt.
+          and your own imported waypoints. All translated into elk-specific scouting intel for the season and time you hunt.
         </p>
         <div class="hero-actions">
           <q-btn

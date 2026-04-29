@@ -136,10 +136,10 @@ RidgeRead was born from a simple frustration: all the mapping tools in the world
 
 ## PRICING SECTION
 
-### Free Tier
+<!-- ### Free Tier
 - 3 analyses per month
 - All behavior layers and season controls
-- Topo, satellite, street, and terrain base maps
+- Topo, satellite, street, and terrain base maps -->
 
 ### Pro — $10/month
 - 20 analyses per month
