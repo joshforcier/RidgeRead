@@ -3,6 +3,7 @@ import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import type L from 'leaflet'
 import { useUserPinsStore } from '@/stores/userPins'
 import { pinTypeMeta, pinTypeOrder, type PinType } from '@/types/userPin'
+import { userPinIconSvg } from '@/utils/userPinIcons'
 import CoordinateChip from '@/components/common/CoordinateChip.vue'
 
 const props = defineProps<{ map: L.Map | null }>()
@@ -18,7 +19,6 @@ let dragStart: { pointerId: number; x: number; y: number; offsetX: number; offse
 
 const isOpen = computed(() => store.draft !== null)
 const isExisting = computed(() => !!store.draft?.id)
-const customIconKinds = new Set(['elk-antlers', 'binoculars', 'tracks'])
 
 const popupStyle = computed(() => {
   if (!screenPos.value) return {}
@@ -29,7 +29,12 @@ const popupStyle = computed(() => {
 })
 
 function isCustomIcon(type: PinType): boolean {
-  return customIconKinds.has(pinTypeMeta[type].iconKind ?? '')
+  return !!pinTypeMeta[type].iconKind
+}
+
+function customIconHtml(type: PinType): string {
+  const iconKind = pinTypeMeta[type].iconKind
+  return iconKind ? userPinIconSvg(iconKind, 'upp-type-icon upp-type-icon--svg') : ''
 }
 
 function recomputePosition() {
@@ -193,49 +198,7 @@ onBeforeUnmount(() => {
             v-if="!isCustomIcon(t)"
             class="material-icons upp-type-icon"
           >{{ pinTypeMeta[t].icon }}</i>
-          <svg
-            v-else-if="pinTypeMeta[t].iconKind === 'elk-antlers'"
-            class="upp-type-icon upp-type-icon--svg"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path d="M12 20v-6" />
-            <path d="M12 14c-2.6-1.2-4.5-3.8-5.2-6.8" />
-            <path d="M6.8 7.2 4.6 5" />
-            <path d="M7.4 9.7H4.2" />
-            <path d="M8.8 12.2 6.2 14.3" />
-            <path d="M12 14c2.6-1.2 4.5-3.8 5.2-6.8" />
-            <path d="M17.2 7.2 19.4 5" />
-            <path d="M16.6 9.7h3.2" />
-            <path d="M15.2 12.2l2.6 2.1" />
-            <path d="M10 20h4" />
-          </svg>
-          <svg
-            v-else-if="pinTypeMeta[t].iconKind === 'binoculars'"
-            class="upp-type-icon upp-type-icon--svg"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path d="M7.5 8.5 9 5.5h2l1 3" />
-            <path d="M16.5 8.5 15 5.5h-2l-1 3" />
-            <path d="M5.5 9.5h5v7h-5z" />
-            <path d="M13.5 9.5h5v7h-5z" />
-            <path d="M10.5 12h3" />
-            <path d="M6.8 16.5c0 1.1.9 2 2 2s2-.9 2-2" />
-            <path d="M13.2 16.5c0 1.1.9 2 2 2s2-.9 2-2" />
-          </svg>
-          <svg
-            v-else
-            class="upp-type-icon upp-type-icon--svg"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path d="M8.3 5.8c1.2 1.2 1.5 3.2.6 4.4-.9 1.2-2.7 1.1-4-.1-1.2-1.2-1.5-3.2-.6-4.4.9-1.2 2.7-1.1 4 .1Z" />
-            <path d="M15.7 13.8c1.2 1.2 1.5 3.2.6 4.4-.9 1.2-2.7 1.1-4-.1-1.2-1.2-1.5-3.2-.6-4.4.9-1.2 2.7-1.1 4 .1Z" />
-            <path d="M11.5 4.5c.8.3 1.2 1.2.9 2" />
-            <path d="M4.2 13.4c.8.3 1.2 1.2.9 2" />
-            <path d="M18.9 9c.8.3 1.2 1.2.9 2" />
-          </svg>
+          <span v-else class="upp-type-icon-host" v-html="customIconHtml(t)" />
           <span>{{ pinTypeMeta[t].label }}</span>
         </button>
       </div>
@@ -369,11 +332,26 @@ onBeforeUnmount(() => {
   font-size: 18px;
   color: var(--accent);
 }
+.upp-type-icon-host {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
 .upp-type-icon--svg {
   width: 20px;
   height: 20px;
   fill: none;
   stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.upp-type-icon-host :deep(.upp-type-icon--svg) {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;

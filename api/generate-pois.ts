@@ -26,9 +26,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const authedReq = req as unknown as AuthedRequest
     authedReq.uid = decoded.uid
     authedReq.email = decoded.email ?? null
-    await generatePOIs(authedReq as Request, res as unknown as Response)
   } catch (err) {
     console.error('[api/generate-pois] verifyIdToken failed:', err)
     res.status(401).json({ error: 'Invalid or expired token' })
+    return
+  }
+
+  try {
+    await generatePOIs(req as unknown as Request, res as unknown as Response)
+  } catch (err) {
+    console.error('[api/generate-pois] handler failed:', err)
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to generate POIs' })
+    }
   }
 }

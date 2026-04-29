@@ -72,7 +72,15 @@ async function handleSignOut() {
       />
 
       <q-toolbar-title class="logo" shrink>
-        <span class="logo-text">Ridge</span><span class="logo-accent">Read</span>
+        <svg class="logo-mark" viewBox="0 0 68 68" fill="none" aria-hidden="true">
+          <g stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none">
+            <path d="M6 56 L24 30 L34 42 L44 22 L62 56" />
+            <path d="M14 50 L26 36 L34 46 L44 30 L54 50" opacity="0.7" />
+            <path d="M22 46 L28 40 L34 48 L42 36 L48 46" opacity="0.45" />
+            <path d="M28 44 L34 50 L40 44" opacity="0.25" />
+          </g>
+        </svg>
+        <span class="logo-wordmark"><span class="logo-text">Ridge</span><span class="logo-accent">Read</span></span>
         <span class="logo-badge q-ml-sm">ELK TERRAIN INTELLIGENCE</span>
       </q-toolbar-title>
 
@@ -188,7 +196,20 @@ async function handleSignOut() {
   letter-spacing: -0.5px;
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 7px;
+}
+
+.logo-mark {
+  width: 45px;
+  height: 45px;
+  flex: 0 0 auto;
+  color: #e8c547;
+  filter: drop-shadow(0 0 12px rgba(232, 197, 71, 0.16));
+}
+
+.logo-wordmark {
+  display: inline-flex;
+  align-items: baseline;
 }
 
 .logo-text {
@@ -334,6 +355,10 @@ async function handleSignOut() {
 
 /* ─── Mobile ─── */
 @media (max-width: 599px) {
+  .logo-mark {
+    width: 27px;
+    height: 27px;
+  }
   .logo-badge {
     display: none;
   }

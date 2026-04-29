@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import DefaultLayout from '@/layouts/DefaultLayout.vue'
+import { Analytics } from '@vercel/analytics/vue'
 
 const route = useRoute()
 
@@ -15,6 +16,7 @@ const hideChrome = computed(() => route.meta.hideChrome === true)
 
   <!-- App pages: header + sidebar + content -->
   <DefaultLayout v-else />
+  <Analytics />
 </template>
 
 <style>

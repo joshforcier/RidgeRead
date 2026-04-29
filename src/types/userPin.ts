@@ -24,10 +24,21 @@ export interface UserPin {
   updatedAt: number
 }
 
+export type PinIconKind =
+  | 'elk-antlers'
+  | 'binoculars'
+  | 'tree-stand'
+  | 'wall-tent'
+  | 'trail-camera'
+  | 'tracks'
+  | 'blood-drop'
+  | 'access-gate'
+  | 'field-note'
+
 export interface PinTypeMeta {
   label: string
   icon: string // Material Icons ligature name, or a custom icon id
-  iconKind?: 'material' | 'elk-antlers' | 'binoculars' | 'tracks'
+  iconKind?: PinIconKind
   color: string // hex accent color
 }
 
@@ -39,13 +50,13 @@ export interface PinTypeMeta {
 export const pinTypeMeta: Record<PinType, PinTypeMeta> = {
   elk:         { label: 'Elk',         icon: 'elk_antlers',    iconKind: 'elk-antlers', color: '#d4a017' },
   glassing:    { label: 'Glassing',    icon: 'binoculars',     iconKind: 'binoculars', color: '#4a90e2' },
-  stand:       { label: 'Stand',       icon: 'park',           color: '#7b5e3c' },
-  camp:        { label: 'Camp',        icon: 'cottage',        color: '#c46a3f' },
-  'trail-cam': { label: 'Trail Cam',   icon: 'photo_camera',   color: '#9c6ade' },
+  stand:       { label: 'Stand',       icon: 'tree_stand',     iconKind: 'tree-stand', color: '#7b5e3c' },
+  camp:        { label: 'Camp',        icon: 'wall_tent',      iconKind: 'wall-tent', color: '#c46a3f' },
+  'trail-cam': { label: 'Trail Cam',   icon: 'trail_camera',   iconKind: 'trail-camera', color: '#9c6ade' },
   sign:        { label: 'Sign',        icon: 'tracks',         iconKind: 'tracks', color: '#5a8f5a' },
-  'kill-site': { label: 'Kill Site',   icon: 'flag',           color: '#c94f4f' },
-  access:      { label: 'Access',      icon: 'local_parking',  color: '#7a8a99' },
-  note:        { label: 'Note',        icon: 'sticky_note_2',  color: '#e6c84a' },
+  'kill-site': { label: 'Kill Site',   icon: 'blood_drop',     iconKind: 'blood-drop', color: '#c94f4f' },
+  access:      { label: 'Access',      icon: 'access_gate',    iconKind: 'access-gate', color: '#7a8a99' },
+  note:        { label: 'Note',        icon: 'field_note',     iconKind: 'field-note', color: '#e6c84a' },
 }
 
 export const pinTypeOrder: PinType[] = [
