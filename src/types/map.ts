@@ -3,6 +3,16 @@ export interface LatLng {
   lng: number
 }
 
+export type HuntLocationSource = 'manual' | 'map-center' | 'map-click'
+
+export interface HuntLocation {
+  label: string
+  lat: number
+  lng: number
+  source: HuntLocationSource
+  updatedAt: string
+}
+
 export interface MapViewState {
   center: LatLng
   zoom: number

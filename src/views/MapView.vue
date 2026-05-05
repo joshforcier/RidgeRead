@@ -8,6 +8,8 @@ import PoiHoverCard from '@/components/map/PoiHoverCard.vue'
 import UserPinPopup from '@/components/map/UserPinPopup.vue'
 import SubscribeModal from '@/components/common/SubscribeModal.vue'
 import LimitReachedModal from '@/components/common/LimitReachedModal.vue'
+import InSeasonPlanPage from '@/components/inseason/InSeasonPlanPage.vue'
+import { fetchOpenMeteoCurrentWeather } from '@/services/weather'
 import { useUserPinsStore } from '@/stores/userPins'
 import { useAuthStore } from '@/stores/auth'
 import { useSubscriptionStore } from '@/stores/subscription'
@@ -18,6 +20,7 @@ import { useMapStore, type BaseLayer, type HuntingPressure } from '@/stores/map'
 import { isInElkRange } from '@/utils/elkRange'
 import type { PointOfInterest } from '@/data/pointsOfInterest'
 import type { TimeOfDay } from '@/data/elkBehavior'
+import type { HuntLocation } from '@/types/map'
 
 const mapStore = useMapStore()
 const userPinsStore = useUserPinsStore()
@@ -71,15 +74,20 @@ function toggleMeasure() {
 
 // Esc exits drop mode (UserPinPopup handles Esc on its own when open).
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && userPinsStore.dropMode && !userPinsStore.draft) {
-    userPinsStore.exitDropMode()
+  if (e.key !== 'Escape') return
+  if (mapStore.huntLocationSelecting) {
+    mapStore.cancelHuntLocationSelection()
+    return
   }
+  if (userPinsStore.dropMode && !userPinsStore.draft) userPinsStore.exitDropMode()
 }
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   stopAnalysisTimer()
   stopViewportListener()
+  stopHuntLocationListener()
+  removeHuntLocationMarker()
 })
 
 const baseLayerOptions: { label: string; value: BaseLayer; icon: string }[] = [
@@ -175,6 +183,65 @@ watch(aiErrorCode, (code) => {
 const hasResults = computed(() => mapContainerRef.value?.hasResults ?? false)
 const fromCache = computed(() => mapContainerRef.value?.fromCache ?? false)
 const mapInstance = computed<L.Map | null>(() => (mapContainerRef.value?.map as L.Map | null) ?? null)
+let stopHuntLocationListener: () => void = () => {}
+let huntLocationMarker: L.Marker | null = null
+
+function huntLocationLabel(lat: number, lng: number): string {
+  return `Hunt Location ${lat.toFixed(5)}, ${lng.toFixed(5)}`
+}
+
+function removeHuntLocationMarker() {
+  if (!huntLocationMarker) return
+  huntLocationMarker.remove()
+  huntLocationMarker = null
+}
+
+function placeHuntLocationMarker(location: HuntLocation) {
+  const map = mapInstance.value
+  if (!map) return
+  removeHuntLocationMarker()
+  const icon = L.divIcon({
+    className: 'hunt-location-marker-leaflet',
+    html: `
+      <div class="hunt-location-marker">
+        <span class="material-symbols-outlined"></span>
+      </div>
+    `,
+    iconSize: [34, 34],
+    iconAnchor: [17, 32],
+  })
+  huntLocationMarker = L.marker([location.lat, location.lng], {
+    icon,
+    interactive: false,
+    zIndexOffset: 1500,
+  }).addTo(map)
+}
+
+async function loadWeatherForHuntLocation(location: HuntLocation) {
+  mapStore.setWeatherLoading(true)
+  mapStore.setWeatherError(null)
+  try {
+    const weather = await fetchOpenMeteoCurrentWeather(location)
+    mapStore.setLiveWeather(weather)
+  } catch (error) {
+    mapStore.setWeatherError(error instanceof Error ? error.message : 'Weather request failed')
+  } finally {
+    mapStore.setWeatherLoading(false)
+  }
+}
+
+function setHuntLocationFromMap(lat: number, lng: number) {
+  const location: HuntLocation = {
+    label: huntLocationLabel(lat, lng),
+    lat,
+    lng,
+    source: 'map-click',
+    updatedAt: new Date().toISOString(),
+  }
+  mapStore.setHuntLocation(location)
+  placeHuntLocationMarker(location)
+  void loadWeatherForHuntLocation(location)
+}
 
 const timeOptions: Array<{ label: string; value: TimeOfDay }> = [
   { label: 'Dawn', value: 'dawn' },
@@ -263,6 +330,47 @@ watch(mapInstance, (map) => {
   }
 }, { immediate: true })
 
+watch(mapInstance, (map) => {
+  stopHuntLocationListener()
+  removeHuntLocationMarker()
+  if (!map) return
+
+  const onClick = (event: L.LeafletMouseEvent) => {
+    if (!mapStore.huntLocationSelecting) return
+    event.originalEvent?.preventDefault()
+    event.originalEvent?.stopPropagation()
+    setHuntLocationFromMap(event.latlng.lat, event.latlng.lng)
+  }
+
+  map.on('click', onClick)
+  if (mapStore.huntLocation) placeHuntLocationMarker(mapStore.huntLocation)
+  stopHuntLocationListener = () => {
+    map.off('click', onClick)
+    stopHuntLocationListener = () => {}
+  }
+}, { immediate: true })
+
+watch(
+  () => mapStore.huntLocationSelecting,
+  (selecting) => {
+    if (!selecting) return
+    if (userPinsStore.dropMode) userPinsStore.exitDropMode()
+    if (measuring.value) mapContainerRef.value?.toggleMeasure()
+    mapContainerRef.value?.selection?.deactivate()
+  },
+)
+
+watch(
+  () => mapStore.huntLocation,
+  (location) => {
+    if (!location) {
+      removeHuntLocationMarker()
+      return
+    }
+    placeHuntLocationMarker(location)
+  },
+)
+
 // `selection` is an object exposed via defineExpose — Vue only auto-unwraps refs at
 // the top level of the exposed surface, so we have to read `.value` explicitly here.
 const selectionActive = computed(() => mapContainerRef.value?.selection?.isActive?.value ?? false)
@@ -279,9 +387,9 @@ type Mode = 'idle' | 'selecting' | 'placed' | 'analyzing' | 'done'
 
 const mode = computed<Mode>(() => {
   if (aiLoading.value) return 'analyzing'
-  if (hasResults.value) return 'done'
   if (selectionLocked.value) return 'placed'
   if (selectionActive.value) return 'selecting'
+  if (hasResults.value) return 'done'
   return 'idle'
 })
 
@@ -296,8 +404,16 @@ function isStepDone(n: 1 | 2): boolean {
   return mode.value === 'done'
 }
 
-function startSelection() {
+function beginAreaSelection() {
+  if (mapStore.huntLocationSelecting) mapStore.cancelHuntLocationSelection()
+  if (userPinsStore.dropMode) userPinsStore.exitDropMode()
+  if (measuring.value) mapContainerRef.value?.toggleMeasure()
+  if (hasResults.value) mapContainerRef.value?.resetAll()
   mapContainerRef.value?.selection?.activate()
+}
+
+function startSelection() {
+  beginAreaSelection()
 }
 
 function cancelSelection() {
@@ -316,10 +432,6 @@ function analyzeArea() {
     }
   }
   mapContainerRef.value?.analyzeSelection()
-}
-
-function resetAll() {
-  mapContainerRef.value?.resetAll()
 }
 
 function clearKept() {
@@ -341,12 +453,58 @@ interface InspectResult {
   features: Record<'saddle' | 'ridge' | 'drainage' | 'bench' | 'fingerRidge', InspectFeature>
 }
 
+type InspectFeatureKey = keyof InspectResult['features']
+
+const inspectFeatureLabels: Record<InspectFeatureKey, string> = {
+  saddle: 'Saddle',
+  ridge: 'Ridge',
+  drainage: 'Drainage',
+  bench: 'Bench',
+  fingerRidge: 'Finger ridge',
+}
+
+const inspectPoiPriority: InspectFeatureKey[] = ['saddle', 'bench', 'fingerRidge', 'ridge', 'drainage']
+
 const inspectExpanded = ref(false)
 const inspectCoords = ref('')
 const inspectSpacing = ref<number>(200)
 const inspectLoading = ref(false)
 const inspectError = ref<string | null>(null)
 const inspectResult = ref<InspectResult | null>(null)
+
+const inspectPoiVerdict = computed(() => {
+  const result = inspectResult.value
+  if (!result) return null
+
+  const bestKey = inspectPoiPriority.find((key) => result.features[key].detected) ?? null
+  const failed = inspectPoiPriority
+    .filter((key) => !result.features[key].detected)
+    .map((key) => `${inspectFeatureLabels[key]}: ${result.features[key].reason}`)
+
+  if (!bestKey) {
+    return {
+      tone: 'no',
+      icon: 'cancel',
+      title: 'Not a strong POI',
+      summary: 'No terrain feature detector passed at this coordinate and spacing.',
+      supporting: [] as string[],
+      limiting: failed.slice(0, 3),
+    }
+  }
+
+  return {
+    tone: 'yes',
+    icon: 'check_circle',
+    title: `Likely POI: ${inspectFeatureLabels[bestKey]}`,
+    summary: `Best terrain match is ${inspectFeatureLabels[bestKey].toLowerCase()} at ${result.point.elevationFt.toLocaleString()} ft, ${result.point.slope.toFixed(1)}° slope, ${result.point.aspect} aspect.`,
+    supporting: [`${inspectFeatureLabels[bestKey]}: ${result.features[bestKey].reason}`],
+    limiting: failed.slice(0, 2),
+  }
+})
+
+function inspectFeatureLabel(key: string): string {
+  return inspectFeatureLabels[key as InspectFeatureKey] ?? key
+}
 
 /**
  * Parse "lat, lng" input. Tolerant of comma OR whitespace separators and
@@ -437,8 +595,22 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <q-page class="map-page">
+  <q-page v-if="mapStore.appMode === 'in-season'" class="inseason-page">
+    <InSeasonPlanPage />
+  </q-page>
+
+  <q-page
+    v-else
+    class="map-page"
+    :class="{
+      'map-page--hunt-selecting': mapStore.huntLocationSelecting,
+    }"
+  >
     <MapContainer ref="mapContainerRef" />
+    <div v-if="mapStore.huntLocationSelecting" class="hunt-location-prompt">
+      <q-icon name="add_location_alt" size="17px" />
+      Click the map to set hunt weather
+    </div>
     <HoverTooltip v-if="hoverScores" :scores="hoverScores" />
     <InfoPanel />
     <PoiDetailPanel />
@@ -448,7 +620,13 @@ onBeforeUnmount(() => {
     <LimitReachedModal v-model="limitReachedModalOpen" />
 
     <!-- Stepper panel -->
-    <div class="stepper-card" :class="{ 'stepper-card--collapsed': stepperCollapsed }">
+    <div
+      class="stepper-card"
+      :class="{
+        'stepper-card--collapsed': stepperCollapsed,
+        'stepper-card--inseason': mapStore.appMode === 'in-season',
+      }"
+    >
       <div class="stepper-track">
         <div class="step" :class="{ 'step--active': isStepActive(1), 'step--done': isStepDone(1) }">
           <span class="step-num">
@@ -518,10 +696,6 @@ onBeforeUnmount(() => {
             <q-icon name="auto_awesome" size="18px" />
             <span>Analyze Area</span>
           </button>
-          <button class="map-btn map-btn--ghost map-btn--sm" @click="startSelection">
-            <q-icon name="near_me" size="14px" />
-            Reposition
-          </button>
         </template>
 
         <template v-else-if="mode === 'analyzing'">
@@ -590,9 +764,9 @@ onBeforeUnmount(() => {
           <p class="step-disclaimer">
             High-probability terrain for the selected season, time, and pressure.
           </p>
-          <button class="map-btn map-btn--ghost map-btn--sm" @click="resetAll">
+          <button class="map-btn map-btn--primary" @click="beginAreaSelection">
             <q-icon name="restart_alt" size="14px" />
-            New Selection
+            Select Area
           </button>
         </template>
 
@@ -690,6 +864,27 @@ onBeforeUnmount(() => {
             </div>
             <p v-if="inspectError" class="inspect-error">{{ inspectError }}</p>
             <div v-if="inspectResult" class="inspect-result">
+              <div
+                v-if="inspectPoiVerdict"
+                class="inspect-verdict"
+                :class="`inspect-verdict--${inspectPoiVerdict.tone}`"
+              >
+                <div class="inspect-verdict-head">
+                  <q-icon :name="inspectPoiVerdict.icon" size="15px" />
+                  <span>{{ inspectPoiVerdict.title }}</span>
+                </div>
+                <p class="inspect-verdict-summary">{{ inspectPoiVerdict.summary }}</p>
+                <ul class="inspect-verdict-reasons">
+                  <li v-for="reason in inspectPoiVerdict.supporting" :key="`support-${reason}`">
+                    <span class="inspect-reason-tag inspect-reason-tag--yes">why</span>
+                    <span>{{ reason }}</span>
+                  </li>
+                  <li v-for="reason in inspectPoiVerdict.limiting" :key="`limit-${reason}`">
+                    <span class="inspect-reason-tag inspect-reason-tag--no">why not</span>
+                    <span>{{ reason }}</span>
+                  </li>
+                </ul>
+              </div>
               <div class="inspect-pt">
                 <span>{{ inspectResult.point.elevationFt.toLocaleString() }} ft</span>
                 <span>·</span>
@@ -704,7 +899,7 @@ onBeforeUnmount(() => {
                   :class="['inspect-feat', f.detected ? 'inspect-feat--yes' : 'inspect-feat--no']"
                 >
                   <q-icon :name="f.detected ? 'check_circle' : 'cancel'" size="12px" />
-                  <span class="inspect-feat-name">{{ key }}</span>
+                  <span class="inspect-feat-name">{{ inspectFeatureLabel(key) }}</span>
                   <span class="inspect-feat-reason">{{ f.reason }}</span>
                 </li>
               </ul>
@@ -784,12 +979,63 @@ onBeforeUnmount(() => {
   position: relative;
 }
 
+.inseason-page {
+  min-height: inherit;
+  background: #060a0f;
+}
+
+.inseason-page :deep(.inseason-plan-page) {
+  min-height: calc(100vh - 56px);
+}
+
 .map-page :deep(.map-container) {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
+}
+
+.map-page--hunt-selecting :deep(.leaflet-container) {
+  cursor: crosshair;
+}
+
+.map-page--inseason :deep(.leaflet-top.leaflet-left) {
+  top: 64px;
+}
+
+.map-page--inseason :deep(.hover-tooltip) {
+  top: 76px;
+}
+
+.map-page--inseason :deep(.poi-detail-panel) {
+  top: 76px;
+  max-height: calc(100vh - 160px);
+}
+
+.hunt-location-prompt {
+  position: absolute;
+  top: 76px;
+  left: 50%;
+  z-index: 1003;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid rgba(232, 197, 71, 0.55);
+  border-radius: 7px;
+  background: rgba(10, 14, 20, 0.94);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  color: var(--amber, #e8c547);
+  font-family: var(--mono, 'JetBrains Mono', monospace);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  text-transform: uppercase;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 /* ─── Stepper Card ─── */
@@ -799,12 +1045,15 @@ onBeforeUnmount(() => {
   right: 12px;
   z-index: 1000;
   width: 320px;
+  max-height: calc(100vh - 92px);
   background: rgba(15, 25, 35, 0.92);
   backdrop-filter: blur(12px);
   border: 1px solid #1e2d3d;
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
 }
 
 .stepper-track {
@@ -909,11 +1158,32 @@ onBeforeUnmount(() => {
   border-bottom: none;
 }
 
+.stepper-card--inseason {
+  top: 76px;
+  max-height: calc(100vh - 156px);
+}
+
 .stepper-body {
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.stepper-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.stepper-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.stepper-body::-webkit-scrollbar-thumb {
+  background: rgba(200, 214, 229, 0.16);
+  border-radius: 4px;
 }
 
 .step-caption {
@@ -1245,6 +1515,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 8px;
   margin-top: 6px;
+  min-width: 0;
 }
 
 .inspect-row {
@@ -1254,9 +1525,11 @@ onBeforeUnmount(() => {
 }
 
 .inspect-spacing-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .inspect-spacing-label {
@@ -1311,6 +1584,90 @@ onBeforeUnmount(() => {
   gap: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.inspect-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid #25384a;
+  border-radius: 8px;
+  background: rgba(7, 12, 18, 0.42);
+  color: #9fb0c2;
+  min-width: 0;
+}
+
+.inspect-verdict--yes {
+  border-color: rgba(143, 218, 163, 0.28);
+  background: rgba(34, 197, 94, 0.07);
+}
+
+.inspect-verdict--no {
+  border-color: rgba(148, 163, 184, 0.24);
+}
+
+.inspect-verdict-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #c8d6e5;
+  font-weight: 800;
+  font-size: 11.5px;
+}
+
+.inspect-verdict--yes .inspect-verdict-head {
+  color: #9ff0b5;
+}
+
+.inspect-verdict-summary {
+  margin: 0;
+  color: #93a6b8;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.inspect-verdict-reasons {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+}
+
+.inspect-verdict-reasons li {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+  color: #8496a8;
+  line-height: 1.35;
+  min-width: 0;
+}
+
+.inspect-reason-tag {
+  display: inline-flex;
+  justify-content: center;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.inspect-reason-tag--yes {
+  color: #9ff0b5;
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.inspect-reason-tag--no {
+  color: #9fb0c2;
+  background: rgba(148, 163, 184, 0.11);
 }
 
 .inspect-pt {
@@ -1331,12 +1688,13 @@ onBeforeUnmount(() => {
 
 .inspect-feat {
   display: grid;
-  grid-template-columns: 14px 86px 1fr;
+  grid-template-columns: 14px 78px minmax(0, 1fr);
   align-items: start;
   gap: 6px;
   font-size: 10.5px;
   line-height: 1.4;
   color: #8899aa;
+  min-width: 0;
 }
 
 .inspect-feat--yes { color: #8fdaa3; }
@@ -1348,6 +1706,8 @@ onBeforeUnmount(() => {
 }
 .inspect-feat-reason {
   font-family: inherit;
+  min-width: 0;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -1595,6 +1955,28 @@ onBeforeUnmount(() => {
 .inspect-marker-leaflet {
   background: transparent;
   border: none;
+}
+.hunt-location-marker-leaflet {
+  background: transparent;
+  border: none;
+}
+.hunt-location-marker {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #e8c547;
+  border-radius: 50% 50% 50% 4px;
+  background: rgba(10, 14, 20, 0.94);
+  box-shadow: 0 0 0 3px rgba(232, 197, 71, 0.18), 0 6px 18px rgba(0, 0, 0, 0.5);
+  color: #e8c547;
+  pointer-events: none;
+  transform: rotate(-45deg);
+}
+.hunt-location-marker .material-symbols-outlined {
+  font-size: 18px;
+  transform: rotate(45deg);
 }
 .inspect-marker {
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));

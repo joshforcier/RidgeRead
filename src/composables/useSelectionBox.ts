@@ -92,6 +92,7 @@ export function useSelectionBox(map: ShallowRef<L.Map | null>) {
     }
 
     isLocked.value = true
+    isActive.value = false
   }
 
   function activate() {

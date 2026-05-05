@@ -16,6 +16,7 @@ import {
   type EnabledLayers,
 } from '@/composables/usePoiGrading'
 import RankedPoiList from './RankedPoiList.vue'
+import InSeasonPanel from '@/components/inseason/InSeasonPanel.vue'
 
 const mapStore = useMapStore()
 
@@ -75,6 +76,7 @@ function setBufferMiles(value: number | null) {
 
 <template>
   <div class="sidebar-root">
+    <template v-if="mapStore.appMode === 'scouting'">
     <!-- Tab bar -->
     <nav class="tab-bar" role="tablist">
       <button
@@ -244,6 +246,11 @@ function setBufferMiles(value: number | null) {
         </div>
       </q-scroll-area>
     </div>
+    </template>
+
+    <q-scroll-area v-else class="mode-body">
+      <InSeasonPanel />
+    </q-scroll-area>
   </div>
 </template>
 
@@ -252,6 +259,16 @@ function setBufferMiles(value: number | null) {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.mode-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.mode-body :deep(.q-scrollarea__content) {
+  width: 100%;
+  min-width: 0;
 }
 
 /* ─── Tab bar ─── */

@@ -3,12 +3,15 @@ import { computed, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useSubscriptionStore } from '@/stores/subscription'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import FeedbackModal from '@/components/common/FeedbackModal.vue'
+import { useMapStore, type AppMode } from '@/stores/map'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const subscriptionStore = useSubscriptionStore()
+const mapStore = useMapStore()
+const route = useRoute()
 const router = useRouter()
 const feedbackOpen = ref(false)
 
@@ -45,12 +48,17 @@ const trialBadge = computed<{ short: string; tooltip: string } | null>(() => {
   return { short, tooltip }
 })
 
-// const navItems = [
-//   { name: 'Dashboard', path: '/app', icon: 'dashboard' },
-//   { name: 'Map', path: '/map', icon: 'map' },
-//   { name: 'Analysis', path: '/analysis', icon: 'analytics' },
-//   { name: 'Settings', path: '/settings', icon: 'settings' },
-// ]
+const modeLinks: Array<{ label: string; sub: string; mode: AppMode; icon: string }> = [
+  { label: 'Scouting', sub: 'Mode 01', mode: 'scouting', icon: 'travel_explore' },
+  { label: 'In-Season', sub: 'Mode 02', mode: 'in-season', icon: 'event_note' },
+]
+
+function selectMode(mode: AppMode) {
+  mapStore.setAppMode(mode)
+  if (route.path !== '/map') {
+    void router.push('/map')
+  }
+}
 
 async function handleSignOut() {
   await authStore.signOut()
@@ -83,6 +91,27 @@ async function handleSignOut() {
         <span class="logo-wordmark"><span class="logo-text">Ridge</span><span class="logo-accent">Read</span></span>
         <span class="logo-badge q-ml-sm">ELK TERRAIN INTELLIGENCE</span>
       </q-toolbar-title>
+
+      <nav class="mode-links" aria-label="RidgeRead mode">
+        <button
+          v-for="item in modeLinks"
+          :key="item.mode"
+          class="mode-link"
+          :class="{ 'mode-link--active': route.path === '/map' && mapStore.appMode === item.mode }"
+          type="button"
+          @click="selectMode(item.mode)"
+        >
+          <q-icon :name="item.icon" size="16px" />
+          <span class="mode-link-copy">
+            <span class="mode-link-sub">{{ item.sub }}</span>
+            <span class="mode-link-label">{{ item.label }}</span>
+          </span>
+          <span v-if="item.mode === 'in-season'" class="mode-link-live">
+            <span class="mode-link-live-dot" />
+            Beta
+          </span>
+        </button>
+      </nav>
 
       <q-space />
 
@@ -233,36 +262,96 @@ async function handleSignOut() {
   border: 1px solid rgba(232, 197, 71, 0.15);
 }
 
-/* ─── Navigation ─── */
-.nav-links {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.nav-item {
+/* ─── Mode links ─── */
+.mode-links {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
+  margin-left: 14px;
+}
+
+.mode-link {
+  min-width: 0;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid transparent;
   border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
+  background: transparent;
   color: #6b7c8d;
-  text-decoration: none;
   transition: all 0.2s ease;
   cursor: pointer;
 }
 
-.nav-item:hover {
+.mode-link:hover {
   color: #c8d6e5;
   background: rgba(200, 214, 229, 0.06);
 }
 
-.nav-item--active {
+.mode-link--active {
   color: #e8c547 !important;
   background: rgba(232, 197, 71, 0.1);
   border: 1px solid rgba(232, 197, 71, 0.15);
+}
+
+.mode-link-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.mode-link-sub,
+.mode-link-label,
+.mode-link-live {
+  font-family: var(--mono, 'JetBrains Mono', monospace);
+  text-transform: uppercase;
+}
+
+.mode-link-sub {
+  color: #556676;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1;
+}
+
+.mode-link-label {
+  color: currentColor;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+}
+
+.mode-link-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 5px;
+  border: 1px solid rgba(74, 222, 128, 0.28);
+  border-radius: 4px;
+  background: rgba(74, 222, 128, 0.1);
+  color: #4ade80;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.mode-link-live-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: header-live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes header-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 /* ─── Trial badge ─── */
@@ -367,6 +456,29 @@ async function handleSignOut() {
   }
   .nav-item {
     padding: 6px 10px;
+  }
+}
+
+@media (max-width: 940px) {
+  .mode-link-live,
+  .mode-link-sub {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .mode-links {
+    margin-left: 6px;
+    gap: 3px;
+  }
+
+  .mode-link {
+    min-height: 32px;
+    padding: 5px 8px;
+  }
+
+  .mode-link-label {
+    display: none;
   }
 }
 </style>

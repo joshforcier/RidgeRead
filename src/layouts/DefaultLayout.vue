@@ -13,7 +13,7 @@ const appStore = useAppStore()
     <q-drawer
       v-model="appStore.sidebarOpen"
       side="left"
-      :width="290"
+      :width="300"
       bordered
       :breakpoint="700"
       class="sidebar-drawer"

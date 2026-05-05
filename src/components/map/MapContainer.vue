@@ -108,6 +108,7 @@ onBeforeUnmount(() => {
 async function analyzeSelection() {
   if (!selection.bounds.value) return
   await generatePOIs(selection.bounds.value)
+  if (hasResults.value) selection.clearSelection()
 }
 
 function resetAll() {
